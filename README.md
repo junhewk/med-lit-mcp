@@ -8,11 +8,13 @@ It works with Hermes, Claude Code and Claude Desktop on Linux and macOS. It need
 
 ## Install
 
-med-lit-mcp runs through [`uv`](https://docs.astral.sh/uv/). `uvx` fetches the server and its dependencies on first start. The first start takes a while, so pre-warm the cache and check your settings once:
+med-lit-mcp is on [PyPI](https://pypi.org/project/med-lit-mcp/) and runs through [`uv`](https://docs.astral.sh/uv/): `uvx` fetches the server and its dependencies on first start. The first start takes a while, so pre-warm the cache and check your settings once:
 
 ```bash
-NCBI_EMAIL=you@example.org uvx --from git+https://github.com/junhewk/med-lit-mcp med-lit-mcp --check
+NCBI_EMAIL=you@example.org uvx med-lit-mcp --check
 ```
+
+To try the latest unreleased code instead, replace `med-lit-mcp` with `--from git+https://github.com/junhewk/med-lit-mcp med-lit-mcp` in any command below.
 
 ### Hermes
 
@@ -20,7 +22,7 @@ NCBI_EMAIL=you@example.org uvx --from git+https://github.com/junhewk/med-lit-mcp
 hermes mcp add med-lit --command uvx \
   --env NCBI_EMAIL=you@example.org \
   --connect-timeout 180 \
-  --args --from git+https://github.com/junhewk/med-lit-mcp med-lit-mcp
+  --args med-lit-mcp
 hermes mcp test med-lit
 ```
 
@@ -30,7 +32,7 @@ hermes mcp test med-lit
 
 ```bash
 claude mcp add med-lit --scope user -e NCBI_EMAIL=you@example.org -- \
-  uvx --from git+https://github.com/junhewk/med-lit-mcp med-lit-mcp
+  uvx med-lit-mcp
 ```
 
 ### Claude Desktop
@@ -42,7 +44,7 @@ Add the server to `claude_desktop_config.json`: `~/Library/Application Support/C
   "mcpServers": {
     "med-lit": {
       "command": "/Users/you/.local/bin/uvx",
-      "args": ["--from", "git+https://github.com/junhewk/med-lit-mcp", "med-lit-mcp"],
+      "args": ["med-lit-mcp"],
       "env": {"NCBI_EMAIL": "you@example.org"}
     }
   }
@@ -51,7 +53,7 @@ Add the server to `claude_desktop_config.json`: `~/Library/Application Support/C
 
 ### Updating
 
-`uvx` caches the installed version. To pick up a new version, run `uvx --refresh --from git+https://github.com/junhewk/med-lit-mcp med-lit-mcp --check` once, then restart the client.
+`uvx` caches the installed version. To pick up a new release, run `uvx med-lit-mcp@latest --check` once, then restart the client.
 
 ## Settings
 
@@ -191,7 +193,7 @@ Things to know:
 ## Viewer (optional)
 
 ```bash
-uvx --from git+https://github.com/junhewk/med-lit-mcp med-lit-viewer --port 3000
+uvx --from med-lit-mcp med-lit-viewer --port 3000
 ```
 
 The viewer lists the runs of every known project, with screening reasons and evidence, fetched text and each project's wiki pages, and lets researchers record manual screening decisions. It binds to `127.0.0.1`. For remote access, put it behind an authenticated reverse proxy or a private network such as Tailscale.
