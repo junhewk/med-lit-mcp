@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>med-lit</title>
+  <style>
+    :root{font:16px/1.5 system-ui,sans-serif;color:#183042;background:#f5f8f8}
+    *{box-sizing:border-box}body{margin:0}header{background:#123746;color:white;padding:1rem 1.5rem}
+    main{max-width:1100px;margin:auto;padding:1.5rem}h1,h2,h3{line-height:1.2}button,select,input{font:inherit}
+    button{cursor:pointer;border:1px solid #8aa9b4;border-radius:.4rem;background:white;padding:.4rem .7rem}
+    button:hover{background:#e7f2f2}.grid{display:grid;grid-template-columns:minmax(230px,1fr) minmax(0,2fr);gap:1rem}
+    .card{background:white;border:1px solid #d6e2e4;border-radius:.5rem;padding:1rem;margin:.6rem 0}
+    .run{display:block;width:100%;text-align:left;margin:.5rem 0}.muted{color:#526b77}.error{color:#a32020}
+    .badge{display:inline-block;padding:.15rem .45rem;border-radius:.3rem;background:#e8eff2;margin-right:.3rem}
+    .include{background:#d6f1de}.exclude{background:#f8e3df}.uncertain{background:#fff0bf}
+    pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;max-height:28rem;overflow:auto}
+    .actions{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.6rem}input{min-width:16rem;padding:.35rem}
+    @media(max-width:750px){.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <header><strong>med-lit</strong> · literature reviews, screening, and evidence</header>
+  <main>
+    <p>Run search, screening, fetch, and wiki from your MCP client. Review uncertain screening decisions here.</p>
+    <section><h2 id="wiki-title">Wiki</h2><div id="wiki-pages"><p>Select a run to see its project's wiki.</p></div></section>
+    <p id="message" role="status"></p>
+    <div class="grid">
+      <section><h2>Runs</h2><div id="runs"></div></section>
+      <section><h2 id="run-title">Select a run</h2><div id="criteria"></div><div id="articles"></div></section>
+    </div>
+    <section class="card" id="article-detail" hidden><h2>Article</h2><div id="article-meta"></div><pre id="article-text"></pre></section>
+  </main>
+  <script>
+    const runsNode=document.getElementById('runs'), articlesNode=document.getElementById('articles');
+    const message=document.getElementById('message'); let active='', activeProject='';
+    function el(tag,text,cls){const node=document.createElement(tag);node.textContent=text;if(cls)node.className=cls;return node}
+    function fail(error){message.textContent=String(error);message.className='error'}
+    async function data(url,options){const response=await fetch(url,options);const value=await response.json();if(!response.ok)throw Error(value.error||`HTTP ${response.status}`);return value}
+    async function loadRuns(){try{const result=await data('/api/runs');runsNode.replaceChildren();for(const run of result.runs){const button=el('button',`${run.project} · ${run.question||run.run_id}\n${run.candidates} candidates · ${run.selection?.include||0} included · ${run.selection?.uncertain||0} uncertain · ${run.selection?.pending||0} pending`,'run card');button.onclick=()=>showRun(run.run_id);runsNode.append(button)}if(!result.runs.length)runsNode.append(el('p','No runs yet.'))}catch(error){fail(error)}}
+    async function loadWiki(project){try{const base='/api/projects/'+encodeURIComponent(project);const result=await data(base+'/index');document.getElementById('wiki-title').textContent='Wiki: '+project;const node=document.getElementById('wiki-pages');node.replaceChildren();for(const page of result.pages){const link=el('a',page.path.replace(/\.md$/,''));link.href=base+'/page/'+page.path.split('/').map(encodeURIComponent).join('/');link.className='badge';node.append(link)}if(!result.pages.length)node.append(el('p','No wiki pages yet.'))}catch(error){fail(error)}}
+    async function showRun(id){active=id;try{const result=await data('/api/runs/'+encodeURIComponent(id));activeProject=result.project;document.getElementById('run-title').textContent=`${result.project} · run ${id}`;const criteria=document.getElementById('criteria');criteria.replaceChildren();if(result.summary.selection_criteria){criteria.append(el('h3','Criteria'));for(const key of ['include','exclude'])criteria.append(el('p',`${key}: ${result.summary.selection_criteria[key].join('; ')||'none'}`))}articlesNode.replaceChildren();for(const item of result.articles){const card=el('div','','card');card.append(el('h3',item.title||item.uid));card.append(el('span',item.screening?.decision||'unselected','badge '+(item.screening?.decision||'')));card.append(el('span',`Fetch: ${item.fetch} · Wiki: ${item.wiki}`,'muted'));if(item.screening?.reason)card.append(el('p',item.screening.reason));if(item.screening?.evidence)card.append(el('p',`Evidence: “${item.screening.evidence}”`,'muted'));const actions=el('div','','actions');const open=el('button','View article');open.onclick=()=>showArticle(item.uid);actions.append(open);if(item.screening){const reason=el('input','');reason.placeholder='Reason for manual decision';reason.setAttribute('aria-label','Reason for manual decision');actions.append(reason);for(const decision of ['include','exclude']){const button=el('button',`Mark ${decision}`);button.onclick=()=>review(item.uid,decision,reason.value);actions.append(button)}}card.append(actions);articlesNode.append(card)}if(!result.articles.length)articlesNode.append(el('p','No articles in this run.'));message.textContent='';await loadWiki(result.project)}catch(error){fail(error)}}
+    async function review(uid,decision,reason){if(!reason.trim()){message.textContent='Enter a reason for the manual decision.';message.className='error';return}try{await data('/api/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({run_id:active,uid,decision,reason})});await showRun(active);await loadRuns()}catch(error){fail(error)}}
+    async function showArticle(uid){try{const article=await data('/api/runs/'+encodeURIComponent(active)+'/articles/'+encodeURIComponent(uid));const detail=document.getElementById('article-detail');detail.hidden=false;const meta=document.getElementById('article-meta');meta.replaceChildren(el('span',`${article.title||uid} · ${article.content_type||'unknown'} · ${article.doi||''} `));if(/^https?:\/\//.test(article.url||'')){const link=el('a','Source');link.href=article.url;link.target='_blank';link.rel='noopener noreferrer';meta.append(link)}document.getElementById('article-text').textContent=article.full_text||'No fetched content yet.';detail.scrollIntoView({behavior:'smooth'})}catch(error){fail(error)}}
+    loadRuns();setInterval(()=>{loadRuns();if(active)showRun(active)},15000);
+  </script>
+</body>
+</html>
