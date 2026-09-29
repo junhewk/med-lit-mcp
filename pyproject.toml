@@ -1,0 +1,44 @@
+[project]
+name = "med-lit-mcp"
+version = "0.1.0"
+description = "MCP server for staged, auditable medical literature review that builds an evidence-linked wiki"
+readme = "README.md"
+license = "PolyForm-Noncommercial-1.0.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Junhewk" }]
+requires-python = ">=3.11"
+dependencies = [
+  "mcp>=1.26,<2",
+  "httpx>=0.27,<1",
+  "pypdf>=5,<7",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+med-lit-mcp = "med_lit_mcp.server:main"
+med-lit-viewer = "med_lit_mcp.web:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/med_lit_mcp"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+pythonpath = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff.lint]
+extend-select = ["T20"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/med_lit_mcp/web.py" = ["T201"]
+# Search engine merged from hermes-medical-search 0.2.1; its CLI prints to the log files of the
+# background search process, never to the MCP stdio pipe.
+"src/med_lit_mcp/medsearch/*" = ["T201", "BLE001", "DTZ007", "DTZ011", "FURB167", "ISC004", "PYI034", "TRY004"]
+"tests/*" = ["T201"]
