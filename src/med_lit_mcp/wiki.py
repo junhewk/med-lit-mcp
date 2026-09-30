@@ -923,7 +923,7 @@ def next_synthesis(
     from .bot import synthesis_allowance
 
     if synthesis_allowance(project) == 0:
-        return {"done": True, "note": "This bot run has written its entity pages (bot.max_syntheses); the rest wait for the next run"}
+        return {"done": True, "note": "This bot run reached its safety limit on entity pages (bot.max_syntheses); the rest wait for the next run"}
     with database(project.db) as conn:
         queue, blocked = _synthesis_queue(conn, uids, min_sources)
         if not queue:
@@ -993,7 +993,7 @@ def record_synthesis(
     from .wiki_export import export_entity
 
     if synthesis_allowance(project) == 0:
-        raise ValueError("This bot run has written its entity pages (bot.max_syntheses); stop and report done")
+        raise ValueError("This bot run reached its safety limit on entity pages (bot.max_syntheses); stop and report done")
 
     with database(project.db) as conn:
         context = synthesis_context(conn, entity_id)

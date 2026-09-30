@@ -70,7 +70,10 @@ class WikiSettings(Section):
 class BotSettings(Section):
     lookback_days: int = Field(default=90, ge=1, le=3650, description="Publication-date look-back of each run (open-ended to the future)")
     max_new_articles: int = Field(default=20, ge=1, le=1000, description="New articles screened per run; the rest are dropped and reported")
-    max_syntheses: int = Field(default=15, ge=0, le=1000, description="Entity pages written per run")
+    max_syntheses: int = Field(
+        default=100, ge=0, le=1000,
+        description="Safety limit on entity pages written or updated in one run; normally every due page is written",
+    )
 
 
 class ProjectSettings(Section):
