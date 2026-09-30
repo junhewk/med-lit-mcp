@@ -269,7 +269,10 @@ def fetch_batch(
 ) -> dict[str, Any]:
     ncbi_email(required=True)
     project, path = locate(run_id)
-    config = load_settings(project.root).fetch
+    project_settings = load_settings(project.root)
+    config = project_settings.fetch
+    # A bot's standing run grows every run; its intake is capped by bot.max_new_articles instead.
+    limit = None if project_settings.mode == "bot" else config.limit
     started = time.monotonic()
     with locked_run(path) as manifest:
         require_selection_complete(manifest, "fetch")
@@ -297,12 +300,12 @@ def fetch_batch(
 
         queue = [uid for uid in chosen if todo(uid)]
         skipped_now: list[str] = []
-        if config.limit is not None and not explicit:
+        if limit is not None and not explicit:
             attempted = sum(1 for uid in chosen if manifest["articles"][uid]["fetch"] not in ("pending", "skipped"))
-            room = max(0, config.limit - attempted)
+            room = max(0, limit - attempted)
             for uid in [u for u in queue if manifest["articles"][u]["fetch"] == "pending"][room:]:
                 manifest["articles"][uid]["fetch"] = "skipped"
-                manifest["articles"][uid]["error"] = f"over the project's fetch limit ({config.limit})"
+                manifest["articles"][uid]["error"] = f"over the project's fetch limit ({limit})"
                 skipped_now.append(uid)
             if skipped_now:
                 save_run(path, manifest)

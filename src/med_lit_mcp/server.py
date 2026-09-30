@@ -16,6 +16,7 @@ from pydantic import Field
 
 from . import (
     __version__,
+    bot,
     config,
     fetch,
     keys,
@@ -57,6 +58,9 @@ Tools by stage (if your client loads tools on demand, look them up by these name
 - fetch: fetch_articles
 - wiki: wiki_tasks (start here and follow it), export_wiki
 - status: get_run_status, list_runs, list_articles
+- bot (scheduled jobs of bot projects only; follow the job's prompt): bot_start, bot_next, bot_finish.
+  A bot project's question, criteria and settings change only with `uvx med-lit-mcp setup bot --edit`;
+  in chat, read it and decide its uncertain articles with review_article.
 - rules: guide(topic) with workflow, question, screening, fetch, wiki, extraction, duplicates,
   synthesis or ontology. Read guide("workflow") first, and the stage's guide before starting it.
 """
@@ -88,6 +92,15 @@ def _question(question: ResearchQuestion) -> dict[str, Any]:
     return question.model_dump(mode="json", exclude_none=True)
 
 
+BOT_ONLY = "'{name}' is a bot project: it searches on its schedule, and its question and criteria change only with `uvx med-lit-mcp setup bot --edit`"
+
+
+def _not_bot(project: projects.Project) -> projects.Project:
+    if project.mode == "bot":
+        raise ValueError(BOT_ONLY.format(name=project.name))
+    return project
+
+
 def _page(result: dict[str, Any]) -> list[TextContent]:
     if result.get("done"):
         return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
@@ -111,6 +124,8 @@ async def create_project(
     ] = None,
 ) -> dict[str, Any]:
     """Create a project: one folder per review, holding its wiki and (hidden) its data."""
+    if projects.scope() == "bot":
+        raise ValueError("This server only runs bot projects; create them with `uvx med-lit-mcp setup bot`")
     project = await _run(projects.create_project, name, path)
     return project.summary() | {"note": "Search with start_search(project=...) once the question is approved."}
 
@@ -187,7 +202,7 @@ async def start_search(
     def start() -> dict[str, Any]:
         draft = search.load_draft(question_id)
         return search.start_search(
-            projects.get_project(project or draft.get("project")), draft["question"], draft["sources"],
+            _not_bot(projects.get_project(project or draft.get("project"))), draft["question"], draft["sources"],
             limit_per_source=limit_per_source, wait_seconds=wait_seconds,
         )
 
@@ -215,7 +230,12 @@ async def set_screening_criteria(
     replace: Annotated[bool, Field(description="Required to change existing criteria; starts a new revision and re-screens everything")] = False,
 ) -> dict[str, Any]:
     """Save the researcher's inclusion and exclusion criteria for screening. Rules: guide("screening")."""
-    return await _run(screening.set_criteria, run_id, include, exclude, replace=replace)
+
+    def save() -> dict[str, Any]:
+        _not_bot(projects.locate(run_id)[0])
+        return screening.set_criteria(run_id, include, exclude, replace=replace)
+
+    return await _run(save)
 
 
 @mcp.tool(annotations=LOCAL)
@@ -250,6 +270,8 @@ async def review_article(
     ctx: Context,
 ) -> dict[str, Any]:
     """Record the researcher's own include/exclude decision and reason for one article."""
+    if projects.scope() == "bot":
+        raise ValueError("Uncertain articles wait for the researcher; a bot never decides them")
     return await _run(screening.review, run_id, uid, decision, reason, client=_client(ctx))
 
 
@@ -457,6 +479,24 @@ async def list_articles(
     return await _run(runs.list_articles, run_id, decision=decision, fetch=fetch_status, wiki=wiki_status, offset=offset, limit=limit)
 
 
+@mcp.tool(annotations=NETWORK)
+async def bot_start(project: Annotated[str, Field(description="The bot project named in the job's prompt")]) -> dict[str, Any]:
+    """Begin a scheduled bot run: lock the project and search its look-back window for new articles."""
+    return await _run(bot.bot_start, project)
+
+
+@mcp.tool(annotations=NETWORK)
+async def bot_next(project: Annotated[str, Field(description="The bot project named in the job's prompt")]) -> dict[str, Any]:
+    """The next step of a bot run (screen, fetch, wiki tasks or finish); do what its `do` says."""
+    return await _run(bot.bot_next, project)
+
+
+@mcp.tool(annotations=LOCAL)
+async def bot_finish(project: Annotated[str, Field(description="The bot project named in the job's prompt")]) -> dict[str, Any]:
+    """End a bot run: refresh the wiki, write the update report, and return the message to reply with."""
+    return await _run(bot.bot_finish, project)
+
+
 @mcp.prompt()
 def plan_search(question: str) -> str:
     """Draft and validate a structured search for a research question."""
@@ -493,6 +533,8 @@ STAGE_TOOLS = {
         "wiki_tasks", "next_wiki_article", "get_article_page", "record_extraction", "find_entities",
         "list_duplicate_candidates", "resolve_duplicates", "merge_entities", "next_synthesis",
         "record_synthesis", "export_wiki",
+        # A bot run needs every stage, so its tools go with the last one.
+        "bot_start", "bot_next", "bot_finish",
     ),
 }
 STAGE_PROMPTS = {"screening": ("screen_run",), "wiki": ("build_wiki",)}
@@ -523,6 +565,7 @@ def check() -> int:
         "config_dir": str(keys.config_dir()),
         "ncbi_email": bool(config.ncbi_email()),
         "keys": {row["key"]: row["source"] for row in keys.status()},
+        "scope": projects.scope(),
         "stages": list(apply_stages()),
         "tools": len(mcp._tool_manager.list_tools()),
     }

@@ -255,7 +255,10 @@ def import_results(path: Path, manifest: dict[str, Any]) -> None:
         raise ValueError("Completed search has no results.jsonl")
     report = read_json(output / "summary.json")
     retried = manifest.get("retry_sources")
-    if retried:
+    update = manifest.get("update")  # a bot's scheduled search into its standing run
+    if update:
+        pass  # failures and counts belong to this update, recorded below
+    elif retried:
         failures = {k: v for k, v in manifest.get("source_failures", {}).items() if k not in retried}
         manifest["source_failures"] = failures | report.get("source_failures", {})
         for key in ("records_by_source", "records_filtered_by_source"):
@@ -271,6 +274,7 @@ def import_results(path: Path, manifest: dict[str, Any]) -> None:
     known = known_articles(path.parent)
     already = manifest.setdefault("already_known", {})
     added = 0
+    fresh: list[tuple[str, dict[str, Any]]] = []
     with results.open(encoding="utf-8") as handle:
         for line in handle:
             if line.strip():
@@ -287,14 +291,36 @@ def import_results(path: Path, manifest: dict[str, Any]) -> None:
                 if match:
                     already[uid] = {"run_id": match[0], "uid": match[1]}
                     continue
-                articles[uid] = {"record": record, "fetch": "pending", "wiki": "pending", "rank": ranks.get(uid)}
+                fresh.append((uid, record))
                 for key in _record_keys(uid, record):
                     known.setdefault(key, (manifest["run_id"], uid))
-                added += 1
+    cap = (update or {}).get("cap")
+    dropped: list[str] = []
+    if cap is not None:
+        # Keep the best-ranked new articles; the rest are reported and may be found again later.
+        fresh.sort(key=lambda pair: (ranks.get(pair[0]) is None, ranks.get(pair[0]) or 0))
+        fresh, dropped = fresh[:cap], [uid for uid, _ in fresh[cap:]]
+    for uid, record in fresh:
+        articles[uid] = {"record": record, "fetch": "pending", "wiki": "pending", "rank": ranks.get(uid)}
+        if update:
+            articles[uid]["added_in_update"] = update["number"]
+        added += 1
+    if update:
+        engine = read_json(output / "manifest.json").get("sources") or {}
+        manifest.setdefault("updates", []).append(
+            update | {
+                "finished_at": now(),
+                "new_articles": added,
+                "dropped_over_cap": dropped,
+                "source_failures": report.get("source_failures", {}),
+                "records_by_source": report.get("records_by_source", {}),
+                "truncated_sources": sorted(k for k, v in engine.items() if isinstance(v, dict) and v.get("truncated")),
+            }
+        )
     if retried:
         manifest["last_retry"] = {"sources": retried, "new_articles": added, "finished_at": now()}
     manifest["search_status"] = "complete"
-    for key in ("search_error", "search_pid", "search_output", "retry_sources"):
+    for key in ("search_error", "search_pid", "search_output", "search_question", "retry_sources", "update"):
         manifest.pop(key, None)
     save_run(path, manifest)
 
@@ -384,7 +410,7 @@ def search_argv(path: Path, manifest: dict[str, Any]) -> list[str]:
     if (output / "strategy.json").is_file() and (output / "manifest.json").is_file():
         return [*command, "search", str(output)]
     argv = [
-        *command, "run", str(path / "question.json"), "--output", str(output),
+        *command, "run", str(path / manifest.get("search_question", "question.json")), "--output", str(output),
         "--limit-per-source", str(manifest["limit_per_source"]),
     ]
     if sources:
@@ -459,7 +485,12 @@ def poll(path: Path, manifest: dict[str, Any]) -> None:
 def _fail(path: Path, manifest: dict[str, Any], error: str) -> None:
     """A failed first search fails the run; a failed retry leaves the earlier results in place."""
     retried = manifest.pop("retry_sources", None)
-    if retried:
+    update = manifest.pop("update", None)
+    manifest.pop("search_question", None)
+    if update:
+        manifest["search_status"] = "complete"
+        manifest.setdefault("updates", []).append(update | {"error": error[:500], "finished_at": now()})
+    elif retried:
         manifest["search_status"] = "complete"
         manifest["last_retry"] = {"sources": retried, "error": error[:500], "finished_at": now()}
     else:
@@ -548,6 +579,36 @@ def start_search(
     result = _wait(path, wait_seconds)
     result["warnings"] = checked["warnings"]
     return project.summary() | result
+
+
+def start_update(
+    path: Path,
+    question: dict[str, Any],
+    sources: list[str],
+    *,
+    from_date: str,
+    per_source: int,
+    cap: int | None,
+    wait_seconds: float = 45,
+) -> dict[str, Any]:
+    """Search again into an existing run, from from_date on (open-ended), adding only new articles."""
+    with locked_run(path) as manifest:
+        poll(path, manifest)
+        if manifest["search_status"] == "running":
+            raise ValueError("A search is already running in this run")
+        number = len(manifest.get("updates", [])) + 1
+        windowed = normalize_question(question)
+        windowed["filters"]["from_date"] = from_date
+        windowed["filters"].pop("to_date", None)
+        name = f"question-update-{number}.json"
+        atomic_json(path / name, windowed)
+        manifest.update(
+            search_output=f"search-update-{number}", search_question=name, sources=sources,
+            limit_per_source=per_source,
+            update={"number": number, "from_date": from_date, "cap": cap, "started_at": now()},
+        )
+        _launch(path, manifest)
+    return _wait(path, wait_seconds)
 
 
 def resume_search(run_id: str, wait_seconds: float = 45, *, retry_failed_sources: bool = False) -> dict[str, Any]:
