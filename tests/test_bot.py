@@ -104,8 +104,11 @@ class BotRunTests(BotCase):
         self.assertEqual(bot.bot_next("Watch")["step"], "fetch")
         self.add_text(self.run_id, "pubmed:5", TEXT)
         step = bot.bot_next("Watch")
-        self.assertEqual((step["step"], step["stage"]), ("wiki", "extract"))
-        self.assertIn("pubmed:5", step["tasks"][0])
+        self.assertEqual((step["step"], step["stage"], step["tasks_in_stage"]), ("wiki", "extract", 1))
+        self.assertIn("pubmed:5", step["task"])
+        self.assertIn("delegate_task", step["do"])
+        self.assertEqual(bot.bot_next("Watch")["step"], "wiki")  # handed out again: no progress yet
+        self.assertEqual(bot.bot_next("Watch")["step"], "finish")  # a third time without progress ends the run
 
         finished = bot.bot_finish("Watch")
         report = Path(finished["report"])
@@ -177,7 +180,7 @@ class BotRunTests(BotCase):
         state["active"]["pid"] = 2**22 + 12345  # no such process
         atomic_json(state_path, state)
         self.assertNotIn("busy", self.start())
-        self.assertIn("abandoned", bot.read_state(self.bot)["history"][-1]["outcome"])
+        self.assertIn("stopped before bot_finish", bot.read_state(self.bot)["history"][-1]["outcome"])
 
     def test_the_server_holds_a_run_to_its_page_cap(self) -> None:
         settings.write_settings(
@@ -189,6 +192,26 @@ class BotRunTests(BotCase):
         self.assertTrue(wiki.next_synthesis(self.bot)["done"])
         with self.assertRaisesRegex(ValueError, "max_syntheses"):
             wiki.record_synthesis(self.bot, 1, "digest", "s", "x" * 300, ["a"], [])
+
+    def test_the_next_run_finishes_and_reports_a_run_that_stopped_early(self) -> None:
+        self.found = [record(1, title="Study 1"), record(2, title="Study 2")]
+        self.start()
+        self.screen({"pubmed:1": "include", "pubmed:2": "uncertain"})
+        # The agent stops without bot_finish; its server process is gone.
+        state_path = self.bot.work / bot.BOT_FILE
+        state = read_json(state_path)
+        state["active"]["pid"] = 2**22 + 12345
+        atomic_json(state_path, state)
+        self.found = [record(1, title="Study 1"), record(2, title="Study 2"), record(3, title="Study 3")]
+        self.start()
+        self.screen({"pubmed:3": "exclude"})
+        self.assertEqual(bot.bot_next("Watch")["step"], "fetch")  # the stopped run's include is fetched now
+        text = Path(bot.bot_finish("Watch")["report"]).read_text()
+        self.assertIn("Includes the work of 1 earlier run(s) that stopped before finishing", text)
+        self.assertIn("New articles: 3", text)
+        self.assertIn("included 1, excluded 1, uncertain 1", text)
+        history = bot.read_state(self.bot)["history"]
+        self.assertEqual([h["outcome"][:7] for h in history], ["stopped", "finishe"])
 
     def test_paused_bots_do_not_run(self) -> None:
         bot.set_status(self.bot, "paused")

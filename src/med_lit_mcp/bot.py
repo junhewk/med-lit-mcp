@@ -17,6 +17,7 @@ from the wiki), and a new question backfills from the bot's start date.
 from __future__ import annotations
 
 import copy
+import hashlib
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -48,6 +49,7 @@ SILENT = "[SILENT]"
 # Hermes stops a cron run after 10 idle minutes, so an hour without writes means it is gone.
 STALE = timedelta(hours=1)
 SEARCH_WAIT = 200  # seconds a bot tool waits for its search before handing back
+MAX_TASK_REPEATS = 2  # the same wiki task handed out three times with no progress ends the run
 
 
 def cron_prompt(name: str) -> str:
@@ -56,9 +58,13 @@ def cron_prompt(name: str) -> str:
         f'You are the med-lit literature bot for the project "{name}". Work only with the med-lit tools.\n'
         f'1. Call bot_start(project="{name}"). If it reports busy, reply with its message and stop.\n'
         f'2. Call bot_next(project="{name}") and do exactly what its "do" says, then call bot_next again. '
-        "Give each wiki task, verbatim, to its own subagent with delegate_task, one at a time.\n"
+        'When it gives a wiki "task", call delegate_task with that task text as the goal, wait for the '
+        "subagent to finish, then call bot_next again.\n"
         f'3. When bot_next says finish, call bot_finish(project="{name}") and reply with its "message" '
         "exactly, nothing else.\n"
+        "Keep calling tools until bot_finish: never end your reply before it, and never reply with a plan or "
+        "a note to yourself. If you cannot go on (a tool keeps failing), reply with [CRON_FAILURE] on the "
+        "first line, then say why.\n"
         "Screening: judge only the title and abstract against the criteria; include and exclude need a "
         "verbatim quote as evidence; when unsure choose uncertain, and the researcher will decide."
     )
@@ -108,7 +114,8 @@ def bot_brief(project: Project) -> dict[str, Any]:
 
 
 def _today() -> date:
-    return datetime.now(UTC).date()
+    """The machine's local date: the day a scheduled run belongs to (05:30 KST is still yesterday in UTC)."""
+    return datetime.now(UTC).astimezone().date()
 
 
 def create_bot(
@@ -201,19 +208,32 @@ def bot_start(name: str | None) -> dict[str, Any]:
         active = state.get("active")
         if active and _run_alive(project, state):
             return {"busy": True, "message": SILENT, "note": f"A run of this bot started at {active['started_at']} is still in progress"}
+        carried: dict[str, Any] = {}
         if active:
-            state["history"].append(active | {"finished_at": now(), "outcome": "abandoned (its process ended or stalled)"})
+            # The run stopped before bot_finish: this run finishes its work and reports it too.
+            state["history"].append(
+                active | {"finished_at": now(), "outcome": "stopped before bot_finish; reported by the next run"}
+            )
+            carried = {
+                "covers_from": active.get("covers_from", active["started_at"]),
+                "updates": active.get("updates") or ([active["update"]] if active.get("update") else []),
+                "withdrawn": active.get("withdrawn", []),
+                "stopped_runs": active.get("stopped_runs", 0) + 1,
+            }
         window = _today() - timedelta(days=settings.bot.lookback_days)
         backfill = state.get("backfill")
         from_date = min(window, date.fromisoformat(backfill["from_date"])) if backfill else window
         state["active"] = {
             "started_at": started.isoformat(),
+            "covers_from": started.isoformat(),
             "pid": os.getpid(),
             "from_date": from_date.isoformat(),
             "backfill": bool(backfill),
             "update": None,
+            "updates": [],
             "withdrawn": [],
-        }
+            "stopped_runs": 0,
+        } | carried
         current = state["questions"][-1]
         run_path = _run_path(project, state)
     result: dict[str, Any]
@@ -231,6 +251,7 @@ def bot_start(name: str | None) -> dict[str, Any]:
         )
         with _state(project) as state:
             state["active"]["update"] = number
+            state["active"]["updates"] = [*state["active"].get("updates", []), number]
     except (OSError, ValueError) as exc:
         result = {"search_error": str(exc)[:300]}
     return project.summary() | {
@@ -348,13 +369,27 @@ def bot_next(name: str | None) -> dict[str, Any]:
     if plan["step"] == "export":
         reason = "all work done" if allowance > 0 else "safety limit on entity pages (bot.max_syntheses) reached; the rest carry over"
         return _finish_step(project, reason)
+    task = plan["tasks"][0]
+    with database(project.db) as conn:
+        progress = conn.execute(
+            """SELECT (SELECT COUNT(*) FROM kg_extraction_pages), (SELECT COALESCE(SUM(version), 0) FROM kg_syntheses),
+                      (SELECT COUNT(*) FROM kg_duplicate_candidates WHERE status='pending')"""
+        ).fetchone()
+    fingerprint = hashlib.sha256(f"{task}|{tuple(progress)}".encode()).hexdigest()
+    with _state(project) as fresh:
+        last = fresh["active"].get("last_task") or {}
+        repeats = last.get("repeats", 0) + 1 if last.get("fingerprint") == fingerprint else 0
+        fresh["active"]["last_task"] = {"fingerprint": fingerprint, "repeats": repeats}
+    if repeats >= MAX_TASK_REPEATS:
+        return _finish_step(project, "a wiki task made no progress after repeated attempts; it carries over to the next run")
     return {
         "step": "wiki",
         "stage": plan["step"],
-        "tasks": plan["tasks"],
+        "task": task,
+        "tasks_in_stage": len(plan["tasks"]),
         "do": (
-            "Give each task, verbatim, to its own fresh subagent with delegate_task, one after another. "
-            f"When all are done, call bot_next(project={project.name!r})."
+            "Call delegate_task with the text of `task`, unchanged, as the goal. When the subagent has "
+            f"finished, call bot_next(project={project.name!r})."
         ),
     }
 
@@ -372,17 +407,17 @@ def _render_report(project: Project, facts: dict[str, Any]) -> str:
     lines = [
         "---",
         "generator: med-lit-bot",
-        f"date: {facts['finished_at'][:10]}",
+        f"date: {facts['date']}",
         "---",
         "",
-        f"# {project.name}: update {facts['finished_at'][:10]}",
+        f"# {project.name}: update {facts['date']}",
         "",
         f"- Window: articles published {facts['from_date']} or later" + (" (backfill for a new question)" if facts["backfill"] else ""),
         f"- New articles: {facts['new_articles']}"
         + (f"; {facts['dropped_over_cap']} more were over the cap of {facts['cap']} and may be picked up later" if facts["dropped_over_cap"] else ""),
         f"- Screened: {facts['screened']} (included {facts['included']}, excluded {facts['excluded']}, uncertain {facts['uncertain']})",
         f"- Fetched: {facts['fetched']}",
-        f"- Entity pages written: {len(facts['syntheses'])}",
+        f"- Entity pages written or updated: {len(facts['syntheses'])}",
     ]
     if facts["syntheses"]:
         lines += ["", "## Entity pages", ""]
@@ -394,6 +429,9 @@ def _render_report(project: Project, facts: dict[str, Any]) -> str:
         lines += ["", f"## Waiting for your decision ({len(facts['awaiting_review'])})", ""]
         lines += [f"- {a['title']} [{a['uid']}]: {a['reason']}" for a in facts["awaiting_review"][:30]]
         lines += ["", "Decide them in a chat with review_article; the bot never decides uncertain articles."]
+    if facts["stopped_runs"]:
+        since = facts["covers_from"][:16].replace("T", " ")
+        lines.insert(7, f"- Includes the work of {facts['stopped_runs']} earlier run(s) that stopped before finishing (since {since} UTC)")
     if facts["no_identifier"]:
         lines += ["", f"## Skipped: no DOI or PMID ({len(facts['no_identifier'])})", ""]
         lines += [f"- {entry['title']} [{entry['uid']}]: {entry['reason']}" for entry in facts["no_identifier"][:20]]
@@ -437,7 +475,7 @@ def bot_finish(name: str | None) -> dict[str, Any]:
     if not active:
         return {"message": SILENT, "note": "No bot run was in progress"}
     path = _run_path(project, state)
-    started = active["started_at"]
+    started = active.get("covers_from", active["started_at"])  # includes runs that stopped early
     try:
         export_wiki(project)
     except (OSError, ValueError) as exc:
@@ -446,7 +484,10 @@ def bot_finish(name: str | None) -> dict[str, Any]:
         export_error = None
     manifest = read_json(path / RUN_FILE)
     revision = manifest.get("selection_revision")
-    update = next((u for u in manifest.get("updates", []) if u.get("number") == active.get("update")), {})
+    numbers = set(active.get("updates") or ([active["update"]] if active.get("update") else []))
+    covered = [u for u in manifest.get("updates", []) if u.get("number") in numbers]
+    update = covered[-1] if covered else {}
+    unidentified = {uid for u in covered for uid in u.get("no_identifier", [])}
     screened = [
         (uid, item) for uid, item in manifest["articles"].items()
         if (item.get("screening") or {}).get("revision") == revision and item["screening"].get("reviewed_at", "") >= started
@@ -467,17 +508,20 @@ def bot_finish(name: str | None) -> dict[str, Any]:
         queue, _ = wiki._synthesis_queue(conn, uids or None, settings.wiki.min_sources)
     facts = {
         "finished_at": now(),
+        "date": _today().isoformat(),
         "from_date": active["from_date"],
         "backfill": active.get("backfill"),
-        "new_articles": update.get("new_articles", 0),
+        "new_articles": sum(u.get("new_articles", 0) for u in covered),
+        "stopped_runs": active.get("stopped_runs", 0),
+        "covers_from": started,
         "dropped_over_cap": len(update.get("dropped_over_cap", [])),
         "cap": update.get("cap"),
         "no_identifier": [
-            entry for entry in manifest.get("skipped_no_identifier", []) if entry["uid"] in set(update.get("no_identifier", []))
+            entry for entry in manifest.get("skipped_no_identifier", []) if entry["uid"] in unidentified
         ],
-        "search_error": update.get("error") or export_error,
-        "source_failures": update.get("source_failures"),
-        "truncated_sources": update.get("truncated_sources"),
+        "search_error": "; ".join(u["error"] for u in covered if u.get("error")) or export_error,
+        "source_failures": {k: v for u in covered for k, v in (u.get("source_failures") or {}).items()},
+        "truncated_sources": sorted({s for u in covered for s in u.get("truncated_sources") or []}),
         "screened": len(screened),
         "included": len(decisions["include"]),
         "excluded": len(decisions["exclude"]),
@@ -496,6 +540,7 @@ def bot_finish(name: str | None) -> dict[str, Any]:
     }
     quiet = not (
         facts["new_articles"] or facts["screened"] or facts["syntheses"] or facts["withdrawn"] or facts["no_identifier"]
+        or facts["stopped_runs"]
         or facts["search_error"] or facts["source_failures"]
     )
     report = None
