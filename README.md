@@ -213,7 +213,7 @@ To run a bot now instead of waiting for its time, answer yes to setup's last que
 **Each run:**
 - searches articles published in the look-back window (90 days by default, open-ended because journals date issues ahead) and takes in only articles new to the project: at most `max_new_articles`, best-ranked first. Articles over the cap are not marked as seen, so later runs pick them up while they are still in the window;
 - screens them against the frozen criteria, fetches and extracts the included ones, and writes every entity page these articles make due (entities with at least `wiki.min_sources` source articles): new pages first, then updates with the new evidence. A run's size is therefore set by `max_new_articles`;
-- finishes all the work its caps allow, however long it takes. Two runs of the same bot never overlap; if a run is interrupted, the next one continues its unfinished work;
+- finishes all the work its articles bring, however long it takes. Two runs of the same bot never overlap; if a run is interrupted, the next one continues its unfinished work;
 - excludes articles with no DOI, PMID or PMCID and lists them in the report; ask for one in a normal chat to add it;
 - writes a report to `updates/<date>.md` in the project folder and replies with the same text, which Hermes saves under `~/.hermes/profiles/medlitbot/cron/output/<job id>/`. A run that found nothing stays silent and writes no report.
 
