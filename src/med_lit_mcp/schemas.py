@@ -15,7 +15,7 @@ MentionRole = Literal[tuple(MENTION_ROLES)]  # type: ignore[valid-type]
 
 ReviewDecision = Literal["include", "exclude"]
 DecisionFilter = Literal["include", "exclude", "uncertain", "pending"]
-FetchStatus = Literal["pending", "full_text", "abstract_only", "failed"]
+FetchStatus = Literal["pending", "full_text", "abstract_only", "failed", "skipped"]
 WikiStatus = Literal["pending", "kg_complete", "complete", "no_entities", "failed"]
 
 

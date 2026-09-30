@@ -19,6 +19,7 @@ from . import __version__
 from .config import ncbi_api_key, ncbi_email
 from .projects import locate
 from .runs import require_selection_complete, selected_uids, summary
+from .settings import load_settings
 from .store import atomic_text, database, locked_run, now, save_run, transaction
 
 MAX_BODY = 10 * 1024 * 1024
@@ -175,13 +176,13 @@ def _open_access(doi: str) -> Fetched | None:
     return None
 
 
-def fetch_content(record: dict[str, Any]) -> Fetched:
+def fetch_content(record: dict[str, Any], *, abstract_only: bool = False) -> Fetched:
     """Return (text, content_type, source_url, method, details): PMC, Unpaywall, then abstract."""
     number = str(record.get("pmcid") or "").upper().removeprefix("PMC")
-    if number.isdigit() and (result := _pmc_text(number)):
+    if not abstract_only and number.isdigit() and (result := _pmc_text(number)):
         return result
     doi = str(record.get("doi") or "").strip()
-    if doi and (result := _open_access(doi)):
+    if not abstract_only and doi and (result := _open_access(doi)):
         return result
     abstract = " ".join(str(record.get("abstract") or "").split())
     if abstract:
@@ -268,10 +269,15 @@ def fetch_batch(
 ) -> dict[str, Any]:
     ncbi_email(required=True)
     project, path = locate(run_id)
+    config = load_settings(project.root).fetch
     started = time.monotonic()
     with locked_run(path) as manifest:
         require_selection_complete(manifest, "fetch")
-        chosen = selected_uids(manifest, uids)
+        # Highest-ranked first, so a fetch limit keeps the most relevant articles.
+        chosen = sorted(
+            selected_uids(manifest, uids),
+            key=lambda uid: (manifest["articles"][uid].get("rank") is None, manifest["articles"][uid].get("rank") or 0),
+        )
         explicit = bool(uids)
         retrying = retry_failed or retry_abstract_only
         # A retry pass tries each failed/abstract-only article once, so repeated calls finish.
@@ -290,6 +296,17 @@ def fetch_batch(
             )
 
         queue = [uid for uid in chosen if todo(uid)]
+        skipped_now: list[str] = []
+        if config.limit is not None and not explicit:
+            attempted = sum(1 for uid in chosen if manifest["articles"][uid]["fetch"] not in ("pending", "skipped"))
+            room = max(0, config.limit - attempted)
+            for uid in [u for u in queue if manifest["articles"][u]["fetch"] == "pending"][room:]:
+                manifest["articles"][uid]["fetch"] = "skipped"
+                manifest["articles"][uid]["error"] = f"over the project's fetch limit ({config.limit})"
+                skipped_now.append(uid)
+            if skipped_now:
+                save_run(path, manifest)
+            queue = [uid for uid in queue if uid not in skipped_now]
         processed: list[dict[str, Any]] = []
         stopped = "done"
         with database(project.db) as conn:
@@ -304,7 +321,7 @@ def fetch_batch(
                 if retrying and item["fetch"] != "pending":
                     item["fetch_retry"] = retry_key
                 try:
-                    fetched = fetch_content(item["record"])
+                    fetched = fetch_content(item["record"], abstract_only=config.mode == "abstract_only")
                     text, content_type, source_url, method, digest = save_article(
                         conn, run_id, uid, item["record"], fetched
                     )
@@ -349,6 +366,7 @@ def fetch_batch(
             "remaining": remaining,
             "stopped_reason": stopped if remaining else "done",
             "fetch": summary(manifest)["fetch"],
+            "skipped_over_limit": skipped_now,
             "note": (
                 "abstract_only articles have no retrievable full text; never describe them as full text"
             ),

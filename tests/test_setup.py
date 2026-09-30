@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from helpers import Case
 
-from med_lit_mcp import cli_setup, keys
+from med_lit_mcp import cli_setup, keys, settings
 
 FAKE_CLIENT = """#!/bin/sh
 echo "$0 $*" >> "{log}"
@@ -104,3 +104,12 @@ class SetupTests(Case):
     def test_dev_checkout_runs_through_uv_run(self) -> None:
         command = cli_setup.server_command(str(self.root))
         self.assertEqual(command[1:], ["run", "--quiet", "--directory", str(self.root.resolve()), "med-lit-mcp"])
+
+    def test_default_settings_are_asked_validated_and_saved(self) -> None:
+        answers = iter(["2020-2010", "2020-", "40", "", "30", ""])  # the first years answer is rejected
+        console = cli_setup.Console(False, ask=lambda _prompt: next(answers))
+        cli_setup.ask_defaults(console)
+        saved = settings.user_defaults()["interactive"]
+        self.assertEqual(saved["search"], {"years": "2020-", "per_source": 40, "preprint_allow": False})
+        self.assertEqual((saved["fetch"]["limit"], saved["wiki"]["max_pages"]), (30, 3))
+        self.assertEqual(settings.new_settings().search.years, "2020-")

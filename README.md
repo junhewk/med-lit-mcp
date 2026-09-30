@@ -16,7 +16,7 @@ med-lit-mcp is on [PyPI](https://pypi.org/project/med-lit-mcp/) and runs through
 uvx med-lit-mcp setup
 ```
 
-Setup asks for your contact email (needed for PubMed and Unpaywall), a folder for your reviews (default `~/med-lit`) and, optionally, API keys. Each key is typed with hidden input, tested against its provider right away, and saved in `~/.config/med-lit-mcp/keys.json`, a file only you can read. Setup then registers med-lit with every Hermes and Claude Code it finds on the machine. Keys never go into the chat or into the clients' configuration files.
+Setup asks for your contact email (needed for PubMed and Unpaywall), a folder for your reviews (default `~/med-lit`), optionally API keys, and optionally your default [review settings](#review-settings). Each key is typed with hidden input, tested against its provider right away, and saved in `~/.config/med-lit-mcp/keys.json`, a file only you can read. Setup then registers med-lit with every Hermes and Claude Code it finds on the machine. Keys never go into the chat or into the clients' configuration files.
 
 Manage keys later without rerunning setup:
 
@@ -74,6 +74,8 @@ Instead of the extension, you can add the server to `claude_desktop_config.json`
 
 ## Settings
 
+### Email, folders and keys
+
 `setup` stores your email and reviews folder in `~/.config/med-lit-mcp/config.json` and your keys in `keys.json` next to it. Environment variables set in an MCP client's configuration take precedence over both.
 
 | Variable | Purpose |
@@ -82,9 +84,35 @@ Instead of the extension, you can add the server to `claude_desktop_config.json`
 | `NCBI_API_KEY` | Optional; raises NCBI rate limits. |
 | `SEMANTIC_SCHOLAR_API_KEY` (or `S2_API_KEY`) | Enables Semantic Scholar by default. Without a key it shares a public rate limit that usually answers HTTP 429, so it is skipped unless requested. [Request a free key](https://www.semanticscholar.org/product/api#api-key-form). |
 | `OPENALEX_API_KEY` | Optional OpenAlex key. |
+| `SCOPUS_API_KEY`, `SCOPUS_INSTTOKEN` | Optional Scopus access. Elsevier keys usually work only from an institution's network; the institutional token lifts that. `keys test scopus` tells you which applies. |
 | `MED_LIT_PROJECTS_DIR` | Where new projects are created when no path is given. Default: `~/med-lit`. |
 | `MED_LIT_STATE_DIR` | Where the list of known projects is kept. Default: `$XDG_DATA_HOME/med-lit-mcp` or `~/.local/share/med-lit-mcp`. |
 | `MED_LIT_STAGES` | Optional, for advanced users. Exposes only the tools up to a stage: `search`, `screening`, `fetch` or `wiki` (default: all). For example, `fetch` hides the 11 wiki tools. Clients that load tools on demand rarely need this; it helps with clients that load every tool up front. Project, status and guide tools are always available. |
+
+### Review settings
+
+Each review keeps its own settings in `med-lit.settings.json`, a visible file at the top of the project folder. The agent shows them when it presents the search question, and changes them with `project_settings` when you ask ("fetch only the top 30", "include preprints"). You can also edit the file yourself.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `search.sources` | `null` | Sources to search; `null` means PubMed, PMC and OpenAlex, plus Semantic Scholar when its key is set. |
+| `search.per_source` | 20 | Records requested from each source (1–200). |
+| `search.years` | `null` | Publication years: `"2020-"`, `"2010-2020"` or `"all"`. `null` means the last three years. Dates written into the question itself take precedence. |
+| `search.preprint_allow` | `false` | Keep preprints (medRxiv, bioRxiv, arXiv, Research Square, SSRN, …). When `false` they are dropped at import and counted in the run's `skipped_preprints`. |
+| `search.languages`, `search.publication_types` | `[]` | Filters applied when the question has none, for example `["english"]` or `["review"]`. |
+| `fetch.limit` | `null` | Most included articles to fetch per search. Articles are fetched in search-rank order; those beyond the limit are marked `skipped`. |
+| `fetch.mode` | `"full_text"` | `"abstract_only"` skips PMC and Unpaywall. |
+| `wiki.max_pages` | 3 | Pages (about 12,000 characters each) read from each article for the wiki. |
+| `wiki.min_sources` | 2 | Source articles an entity needs before it gets a synthesis page; others stay as stubs. |
+| `wiki.tasks_per_conversation` | 5 | For clients without subagents (Claude Desktop): wiki tasks done in one conversation before the agent asks you to continue in a new one. |
+
+A new project starts from a copy of your defaults, so changing the defaults later never alters existing reviews. Set the defaults during `setup`, or edit `~/.config/med-lit-mcp/defaults.json`, which holds one set per project mode:
+
+```json
+{"interactive": {"search": {"years": "2015-", "per_source": 40}, "fetch": {"limit": 30}}}
+```
+
+Settings apply in this order, later ones winning: built-in defaults, your defaults, the project's file, and a value given for a single call (for example `limit_per_source` in `start_search`).
 
 ## Projects
 
@@ -94,6 +122,7 @@ Each review is a **project**: one self-contained folder holding the review's wik
 ~/med-lit/LLMs in shared decision making/      ← the project, and the wiki
 ├── index.md
 ├── log.md
+├── med-lit.settings.json                      ← this review's settings
 ├── entities/Shared decision making.md
 ├── sources/Guirgus 2026 - Assessing Artificial Intelligence in Patient Education.md
 └── .med-lit/                                  ← hidden working data
@@ -134,10 +163,10 @@ Claude Code also exposes the guided prompts `/mcp__med-lit__plan_search`, `scree
 
 How the stages work:
 - **Question structure.** Groups within a component are ANDed, and a group's synonyms are ORed. Give each separately required facet (for example technology and task) its own group; put only true synonyms in a group; leave out ambiguous bare acronyms such as `LLM` unless you approve them. PCC context is for the setting only. Groups can suggest candidate MeSH headings, which are checked against NCBI before use.
-- **Date range.** Without a `from_date` filter, a search covers only the last three years. `validate_question` states the effective start date, so ask for an earlier one if you need it.
+- **Date range.** Without a `from_date` filter or a `search.years` setting, a search covers only the last three years. `validate_question` states the effective start date, so ask for an earlier one if you need it.
 - **Screening** uses titles and abstracts only. Include and exclude decisions need a verbatim quote from the record. A decision whose quote cannot be verified is stored as `uncertain`, and uncertain articles wait for the researcher's own decision.
 - **Changing criteria** requires `replace=true`, starts a new revision, and re-screens every article. Earlier decisions stay in the history.
-- **Fetch** tries PMC full text (NCBI, then Europe PMC). For articles without a PMCID it asks [Unpaywall](https://unpaywall.org) for legal open-access copies of the DOI, preferring a PMC copy and otherwise extracting text from an open-access PDF. The abstract is the last resort, and abstract-only articles are always labelled as such. The source, license and version (published, accepted or submitted) of each full text are recorded. To retry abstract-only articles later, ask for a fetch with `retry_abstract_only`.
+- **Fetch** tries PMC full text (NCBI, then Europe PMC). For articles without a PMCID it asks [Unpaywall](https://unpaywall.org) for legal open-access copies of the DOI, preferring a PMC copy and otherwise extracting text from an open-access PDF. The abstract is the last resort, and abstract-only articles are always labelled as such. Articles are fetched in search-rank order, so a `fetch.limit` keeps the best-ranked ones. The source, license and version (published, accepted or submitted) of each full text are recorded. To retry abstract-only articles later, ask for a fetch with `retry_abstract_only`.
 - **The wiki** is built from paged article text of about 12,000 characters per page, without truncation.
   - Each entity mention and relationship must be quoted verbatim from its page.
   - Entities are matched lexically: case, plurals, spelling variants and acronyms defined in the text, such as "large language models (LLMs)". Only exact key or acronym matches merge automatically. Near matches are queued as possible duplicates for the agent or researcher to merge or keep distinct.
@@ -172,7 +201,7 @@ The wiki is a small knowledge graph. Its model follows the lightweight ontology 
 
 | Stage | Tools |
 |---|---|
-| Projects | `create_project`, `list_projects`, `open_project` |
+| Projects | `create_project`, `list_projects`, `open_project`, `project_settings` |
 | Search | `validate_question`, `start_search`, `resume_search` |
 | Guidance | `guide` (rules for each stage, on demand) |
 | Screening | `set_screening_criteria`, `next_screening_batch`, `record_screening_decisions`, `review_article` |

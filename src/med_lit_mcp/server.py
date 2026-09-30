@@ -23,6 +23,7 @@ from . import (
     runs,
     screening,
     search,
+    settings,
     wiki,
     wiki_export,
 )
@@ -49,7 +50,8 @@ searching. Only verbatim quotes count as evidence; uncertain screening decisions
 researcher's. State lives on disk: check get_run_status rather than chat history.
 
 Tools by stage (if your client loads tools on demand, look them up by these names):
-- projects: list_projects, create_project, open_project
+- projects: list_projects, create_project, open_project, project_settings (show the review's settings
+  when presenting the search question; change them only as the researcher asks)
 - search: validate_question -> start_search(question_id); resume_search
 - screening: set_screening_criteria, next_screening_batch, record_screening_decisions, review_article
 - fetch: fetch_articles
@@ -113,6 +115,30 @@ async def create_project(
     return project.summary() | {"note": "Search with start_search(project=...) once the question is approved."}
 
 
+@mcp.tool(annotations=LOCAL)
+async def project_settings(
+    project: ProjectName = None,
+    changes: Annotated[
+        dict[str, Any] | None,
+        Field(description='Dotted keys to change, e.g. {"search.years": "2015-", "fetch.limit": 30}; omit to only show'),
+    ] = None,
+) -> dict[str, Any]:
+    """Show or change a project's settings (med-lit.settings.json): search years, records per source,
+    preprints, fetch limit and mode, pages per article, and more. Change them only as the researcher asks."""
+
+    def run() -> dict[str, Any]:
+        owner = projects.get_project(project)
+        current = settings.load_settings(owner.root)
+        if changes:
+            if current.mode == "bot":
+                raise ValueError("Bot project settings are changed with `uvx med-lit-mcp setup bot --edit`")
+            current = settings.apply_changes(current, changes)
+            settings.write_settings(owner.root, current)
+        return owner.summary() | {"file": str(settings.settings_path(owner.root)), "settings": current.model_dump()}
+
+    return await _run(run)
+
+
 @mcp.tool(annotations=READ)
 async def list_projects() -> list[dict[str, Any]]:
     """List known projects with their folders. available=false means the folder moved or is missing."""
@@ -135,18 +161,24 @@ async def guide(topic: Literal[tuple(GUIDES)]) -> str:  # type: ignore[valid-typ
 
 @mcp.tool(annotations=READ)
 async def validate_question(
-    question: ResearchQuestion, sources: list[Source] | None = None
+    question: ResearchQuestion, sources: list[Source] | None = None, project: ProjectName = None
 ) -> dict[str, Any]:
-    """Check a drafted PICO/PCC search question and return a question_id for start_search.
-    Show the result to the researcher and wait for approval. Rules: guide("question")."""
-    return await _run(search.validate_question, _question(question), sources)
+    """Check a drafted PICO/PCC search question against the project's settings and return a
+    question_id for start_search. Show the result, including settings, to the researcher and wait
+    for approval. Rules: guide("question")."""
+
+    def check() -> dict[str, Any]:
+        owner = None if project is None and not projects.list_projects() else projects.get_project(project)
+        return search.validate_question(_question(question), sources, owner)
+
+    return await _run(check)
 
 
 @mcp.tool(annotations=NETWORK)
 async def start_search(
     question_id: Annotated[str, Field(description="From validate_question, after the researcher approved it")],
     project: ProjectName = None,
-    limit_per_source: Annotated[int, Field(ge=1, le=200)] = 20,
+    limit_per_source: Annotated[int | None, Field(ge=1, le=200, description="One-off override of the project's setting")] = None,
     wait_seconds: Annotated[int, Field(ge=0, le=240)] = 45,
 ) -> dict[str, Any]:
     """Search the literature databases with an approved question; creates a run in the project.
@@ -155,7 +187,7 @@ async def start_search(
     def start() -> dict[str, Any]:
         draft = search.load_draft(question_id)
         return search.start_search(
-            projects.get_project(project), draft["question"], draft["sources"],
+            projects.get_project(project or draft.get("project")), draft["question"], draft["sources"],
             limit_per_source=limit_per_source, wait_seconds=wait_seconds,
         )
 
@@ -341,7 +373,9 @@ async def merge_entities(
 async def next_synthesis(
     project: ProjectName = None,
     run_id: Annotated[RunId | None, Field(description="Only entities from this run's articles")] = None,
-    min_sources: Annotated[int, Field(ge=1, le=10, description="Entities need at least this many source articles")] = 2,
+    min_sources: Annotated[
+        int | None, Field(ge=1, le=10, description="One-off override of the project's wiki.min_sources")
+    ] = None,
 ) -> dict[str, Any]:
     """Get the next entity whose wiki page needs writing, with its evidence from the project."""
 

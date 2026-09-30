@@ -9,7 +9,7 @@ from .config import enabled_stages
 from .projects import Project, run_dir
 from .store import RUN_FILE, question_text, read_json
 
-FETCH_STATES = ("pending", "full_text", "abstract_only", "failed")
+FETCH_STATES = ("pending", "full_text", "abstract_only", "failed", "skipped")
 WIKI_STATES = ("pending", "kg_complete", "complete", "no_entities", "failed")
 
 
@@ -45,6 +45,7 @@ def summary(manifest: dict[str, Any]) -> dict[str, Any]:
         "source_failures": manifest.get("source_failures", {}),
         "records_by_source": manifest.get("records_by_source", {}),
         "records_filtered_by_source": manifest.get("records_filtered_by_source", {}),
+        "skipped_preprints": len(manifest.get("skipped_preprints", [])),
         "fetch": {state: sum(item["fetch"] == state for item in articles.values()) for state in FETCH_STATES},
         "wiki": {state: sum(item["wiki"] == state for item in articles.values()) for state in WIKI_STATES},
     }
