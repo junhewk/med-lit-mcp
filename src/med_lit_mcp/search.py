@@ -376,7 +376,9 @@ def import_results(path: Path, manifest: dict[str, Any]) -> None:
                     found, how = find_identifiers(record)
                     if not found:
                         if uid not in unidentified:
-                            no_identifier.append({"uid": uid, "title": str(record.get("title") or "")[:200], "reason": how})
+                            no_identifier.append(
+                                {"uid": uid, "title": str(record.get("title") or "")[:200], "reason": how, "record": record}
+                            )
                             unidentified.add(uid)
                             new_unidentified.append(uid)
                         continue
@@ -501,6 +503,46 @@ def search_europepmc(path: Path, question: dict[str, Any], limit: int) -> None:
         },
     )
     atomic_text(output / "results.jsonl", "".join(json.dumps(r) + "\n" for r in records))
+
+
+def add_skipped(run_id: str, uids: list[str]) -> dict[str, Any]:
+    """Add articles skipped for having no DOI, PMID or PMCID, because the researcher asked for them.
+
+    They join the run as pending screening. One whose title matches an article already in the run
+    is left out as a probable duplicate."""
+    path = run_dir(run_id)
+    added, duplicates, unknown = [], [], []
+    with locked_run(path) as manifest:
+        skipped = {entry["uid"]: entry for entry in manifest.get("skipped_no_identifier", [])}
+        for uid in dict.fromkeys(uids):
+            entry = skipped.get(uid)
+            if entry is None or "record" not in entry:
+                unknown.append(uid)
+                continue
+            twin = next(
+                (other for other, item in manifest["articles"].items()
+                 if titles_match(item["record"].get("title"), entry["record"].get("title"))),
+                None,
+            )
+            if twin:
+                duplicates.append({"uid": uid, "same_title_as": twin})
+                continue
+            manifest["articles"][uid] = {
+                "record": entry["record"], "fetch": "pending", "wiki": "pending", "rank": None,
+                "added_on_request": now(),
+            }
+            added.append(uid)
+        manifest["skipped_no_identifier"] = [e for e in manifest.get("skipped_no_identifier", []) if e["uid"] not in added]
+        if added:
+            save_run(path, manifest)
+        return {
+            "run_id": run_id,
+            "added": added,
+            "probable_duplicates": duplicates,
+            "not_skipped": unknown,
+            "note": "Added articles are pending screening; without a DOI, PMID or PMCID only their abstract may be fetched."
+            if added else None,
+        }
 
 
 def search_argv(path: Path, manifest: dict[str, Any]) -> list[str]:
