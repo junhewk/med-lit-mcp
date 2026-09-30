@@ -271,6 +271,20 @@ class IdentifierTests(Case):
         self.assertEqual([e["uid"] for e in manifest["skipped_no_identifier"]], ["openalex:W3"])
         self.assertEqual(first["skipped_no_identifier"], 1)
 
+    def test_skipped_articles_are_added_only_on_request(self) -> None:
+        thesis = {"source": "openalex", "source_id": "W3", "title": "A thesis nobody indexed", "abstract": "About chatbots."}
+        twin = {"source": "openalex", "source_id": "W4", "title": record(7)["title"]}
+        run_id = self.search([thesis, twin, record(7)])["run_id"]
+        manifest = read_json(run_dir(run_id) / RUN_FILE)
+        self.assertEqual(sorted(e["uid"] for e in manifest["skipped_no_identifier"]), ["openalex:W3", "openalex:W4"])
+        result = search.add_skipped(run_id, ["openalex:W3", "openalex:W4", "openalex:W9"])
+        self.assertEqual(result["added"], ["openalex:W3"])
+        self.assertEqual(result["probable_duplicates"], [{"uid": "openalex:W4", "same_title_as": "pubmed:7"}])
+        self.assertEqual(result["not_skipped"], ["openalex:W9"])
+        manifest = read_json(run_dir(run_id) / RUN_FILE)
+        self.assertNotIn("screening", manifest["articles"]["openalex:W3"])  # waits for screening
+        self.assertEqual([e["uid"] for e in manifest["skipped_no_identifier"]], ["openalex:W4"])
+
     def test_title_matching_is_strict(self) -> None:
         title = "The Impact of AI-Based Educational Interventions on Academic Performance"
         self.assertTrue(search.titles_match(title, title.upper() + "."))

@@ -232,6 +232,8 @@ class BotScopeTests(BotCase, unittest.IsolatedAsyncioTestCase):
                 self.assertIn("never decides", review.content[0].text)
                 created = await client.call_tool("create_project", {"name": "Sneaky"})
                 self.assertTrue(created.isError)
+                added = await client.call_tool("add_skipped_articles", {"run_id": self.run_id, "uids": ["openalex:W1"]})
+                self.assertIn("Only the researcher", added.content[0].text)
 
 
 FAKE_HERMES = """#!/bin/sh

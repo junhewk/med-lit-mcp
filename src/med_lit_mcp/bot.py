@@ -397,7 +397,13 @@ def _render_report(project: Project, facts: dict[str, Any]) -> str:
     if facts["no_identifier"]:
         lines += ["", f"## Skipped: no DOI or PMID ({len(facts['no_identifier'])})", ""]
         lines += [f"- {entry['title']} [{entry['uid']}]: {entry['reason']}" for entry in facts["no_identifier"][:20]]
-        lines += ["", "Each is looked up again when a later search finds it, in case a DOI has been registered."]
+        lines += [
+            "",
+            (
+                "They are left out. Each is looked up again when a later search finds it, in case a DOI has "
+                "been registered; to include one now, ask for it by name in a chat (add_skipped_articles)."
+            ),
+        ]
     if facts["withdrawn"]:
         lines += ["", "## Withdrawn from the wiki (now excluded)", ""]
         lines += [f"- [{uid}]" for uid in facts["withdrawn"]]

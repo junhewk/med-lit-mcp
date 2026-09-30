@@ -53,7 +53,8 @@ researcher's. State lives on disk: check get_run_status rather than chat history
 Tools by stage (if your client loads tools on demand, look them up by these names):
 - projects: list_projects, create_project, open_project, project_settings (show the review's settings
   when presenting the search question; change them only as the researcher asks)
-- search: validate_question -> start_search(question_id); resume_search
+- search: validate_question -> start_search(question_id); resume_search; add_skipped_articles (only
+  when the researcher asks for articles skipped for having no DOI or PMID)
 - screening: set_screening_criteria, next_screening_batch, record_screening_decisions, review_article
 - fetch: fetch_articles
 - wiki: wiki_tasks (start here and follow it), export_wiki
@@ -220,6 +221,18 @@ async def resume_search(
 ) -> dict[str, Any]:
     """Check a running search, retry a failed one, or retry just the failed sources of a completed run."""
     return await _run(search.resume_search, run_id, wait_seconds, retry_failed_sources=retry_failed_sources)
+
+
+@mcp.tool(annotations=LOCAL)
+async def add_skipped_articles(
+    run_id: RunId,
+    uids: Annotated[list[str], Field(min_length=1, max_length=50, description="uids from the run's skipped_no_identifier list")],
+) -> dict[str, Any]:
+    """Add articles that were skipped for having no DOI, PMID or PMCID. Use only when the researcher
+    asks for them by name; they then need screening."""
+    if projects.scope() == "bot":
+        raise ValueError("Only the researcher can add skipped articles")
+    return await _run(search.add_skipped, run_id, uids)
 
 
 @mcp.tool(annotations=LOCAL)
@@ -532,7 +545,7 @@ def build_wiki(run_id: str) -> str:
 
 
 STAGE_TOOLS = {
-    "search": ("validate_question", "start_search", "resume_search"),
+    "search": ("validate_question", "start_search", "resume_search", "add_skipped_articles"),
     "screening": ("set_screening_criteria", "next_screening_batch", "record_screening_decisions", "review_article"),
     "fetch": ("fetch_articles",),
     "wiki": (

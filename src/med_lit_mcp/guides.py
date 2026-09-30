@@ -62,6 +62,8 @@ non-zero records_filtered_by_source. A retrieved and screened set is not a compl
   including the settings, pass that id to start_search; to change anything, validate again.
 - Preprints are excluded in each source's query unless the project's search.preprint_allow is true;
   any that still come back are dropped and counted as skipped_preprints.
+- Articles without a DOI, PMID or PMCID are skipped (skipped_no_identifier in the run status). Add
+  them with add_skipped_articles only when the researcher asks for them.
 - A later search in the same project imports only articles new to the project (matched by DOI,
   PMID, PMCID or record id). Articles an earlier search found are counted as already_known and keep
   that search's screening and wiki work; say so when reporting the results.""",
