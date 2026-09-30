@@ -39,8 +39,8 @@ def hermes_path() -> str:
     return path
 
 
-def _hermes(hermes: str, *args: str, stdin: str = "") -> subprocess.CompletedProcess[str]:
-    return _run([hermes, "-p", PROFILE, *args], stdin)
+def _hermes(hermes: str, *args: str, stdin: str = "", timeout: float | None = 300) -> subprocess.CompletedProcess[str]:
+    return _run([hermes, "-p", PROFILE, *args], stdin, timeout)
 
 
 def ensure_profile(hermes: str, command: list[str]) -> list[str]:
@@ -80,8 +80,9 @@ def create_job(hermes: str, name: str, schedule: str) -> str:
     return found.group(0)
 
 
-def job_command(hermes: str, action: str, job_id: str, *extra: str) -> str:
-    result = _hermes(hermes, "cron", action, job_id, *extra, stdin="y\n")
+def job_command(hermes: str, action: str, job_id: str, *extra: str, timeout: float | None = 300) -> str:
+    """timeout=None for `run`, which executes the whole bot run in this process."""
+    result = _hermes(hermes, "cron", action, job_id, *extra, stdin="y\n", timeout=timeout)
     if result.returncode != 0:
         raise SystemExit(f"hermes cron {action} failed:\n{(result.stderr or result.stdout)[-500:]}")
     return result.stdout.strip()
@@ -243,9 +244,10 @@ def create(args: argparse.Namespace, console: Console) -> int:
     print(f"Scheduled {schedule_text(schedule)} as Hermes job {job_id} (profile {PROFILE}).")
     print(f"Reports go to {project.root / bot.UPDATES}; open the folder in Obsidian to read the wiki.")
     print(f"Change it later with: uvx med-lit-mcp setup bot --edit \"{project.name}\"")
-    if console.confirm("Run it once now?", default=False):
-        print(job_command(hermes, "run", job_id))
-        print(f"It starts on the scheduler's next tick; follow it with: hermes -p {PROFILE} cron runs {job_id}")
+    if console.confirm("Run it once now? It runs in this terminal until it finishes (can take an hour or more).", default=False):
+        print("Running…")
+        print(job_command(hermes, "run", job_id, timeout=None))
+        print(f"The report is in {project.root / bot.UPDATES}; past runs: hermes -p {PROFILE} cron runs {job_id}")
     return 0
 
 

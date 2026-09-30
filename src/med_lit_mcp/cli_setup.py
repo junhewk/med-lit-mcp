@@ -54,8 +54,8 @@ def server_command(dev: str | None) -> list[str]:
     return [uvx, "med-lit-mcp"]
 
 
-def _run(command: list[str], stdin: str = "") -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, input=stdin, capture_output=True, text=True, timeout=300, check=False)
+def _run(command: list[str], stdin: str = "", timeout: float | None = 300) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(command, input=stdin, capture_output=True, text=True, timeout=timeout, check=False)
 
 
 def register_hermes(hermes: str, command: list[str], console: Console) -> str:
