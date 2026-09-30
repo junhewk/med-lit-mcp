@@ -128,7 +128,7 @@ class StdioTests(unittest.IsolatedAsyncioTestCase):
             params = StdioServerParameters(
                 command=sys.executable,
                 args=["-m", "med_lit_mcp"],
-                env={"MED_LIT_STATE_DIR": data, "PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", data)},
+                env={"MED_LIT_STATE_DIR": data, "MED_LIT_CONFIG_DIR": data, "PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", data)},
                 cwd=str(ROOT),
             )
             async with stdio_client(params) as (read, write), ClientSession(read, write) as client:
@@ -143,7 +143,7 @@ class StdioTests(unittest.IsolatedAsyncioTestCase):
             params = StdioServerParameters(
                 command=sys.executable,
                 args=["-m", "med_lit_mcp"],
-                env={"MED_LIT_STATE_DIR": data, "MED_LIT_STAGES": "fetch", "PATH": os.environ["PATH"]},
+                env={"MED_LIT_STATE_DIR": data, "MED_LIT_CONFIG_DIR": data, "MED_LIT_STAGES": "fetch", "PATH": os.environ["PATH"]},
                 cwd=str(ROOT),
             )
             async with stdio_client(params) as (read, write), ClientSession(read, write) as client:
@@ -169,7 +169,7 @@ class StdioTests(unittest.IsolatedAsyncioTestCase):
             completed = subprocess.run(
                 [sys.executable, "-m", "med_lit_mcp", "--check"],
                 capture_output=True, text=True, check=True,
-                env={**os.environ, "MED_LIT_STATE_DIR": data, "NCBI_EMAIL": ""},
+                env={**os.environ, "MED_LIT_STATE_DIR": data, "MED_LIT_CONFIG_DIR": data, "NCBI_EMAIL": ""},
             )
         report = json.loads(completed.stdout)
         self.assertEqual((report["database_schema"], report["ncbi_email"], report["tools"]), (1, False, 26))

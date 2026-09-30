@@ -8,13 +8,28 @@ It works with Hermes, Claude Code and Claude Desktop on Linux and macOS. It need
 
 ## Install
 
-med-lit-mcp is on [PyPI](https://pypi.org/project/med-lit-mcp/) and runs through [`uv`](https://docs.astral.sh/uv/): `uvx` fetches the server and its dependencies on first start. The first start takes a while, so pre-warm the cache and check your settings once:
+med-lit-mcp is on [PyPI](https://pypi.org/project/med-lit-mcp/) and runs through [`uv`](https://docs.astral.sh/uv/) ([install uv](https://docs.astral.sh/uv/getting-started/installation/) first if you don't have it). Claude Desktop users can skip the terminal entirely with the extension below.
+
+### Hermes and Claude Code: `setup`
 
 ```bash
-NCBI_EMAIL=you@example.org uvx med-lit-mcp --check
+uvx med-lit-mcp setup
 ```
 
-To try the latest unreleased code instead, replace `med-lit-mcp` with `--from git+https://github.com/junhewk/med-lit-mcp med-lit-mcp` in any command below.
+Setup asks for your contact email (needed for PubMed and Unpaywall), a folder for your reviews (default `~/med-lit`) and, optionally, API keys. Each key is typed with hidden input, tested against its provider right away, and saved in `~/.config/med-lit-mcp/keys.json`, a file only you can read. Setup then registers med-lit with every Hermes and Claude Code it finds on the machine. Keys never go into the chat or into the clients' configuration files.
+
+Manage keys later without rerunning setup:
+
+```bash
+uvx med-lit-mcp keys              # which keys are set, and from where
+uvx med-lit-mcp keys set scopus   # add or replace one (ncbi, openalex, semantic-scholar, scopus, scopus-insttoken)
+uvx med-lit-mcp keys test         # check every key against its provider
+uvx med-lit-mcp keys remove openalex
+```
+
+For unattended use: `uvx med-lit-mcp setup --email you@example.org --yes` accepts the defaults, skips the key questions and registers with every client found; `--client hermes` or `--client claude-code` limits it to one.
+
+To try the latest unreleased code, replace `med-lit-mcp` with `--from git+https://github.com/junhewk/med-lit-mcp med-lit-mcp` in any command.
 
 ### Claude Desktop (no command line)
 
@@ -26,24 +41,16 @@ To try the latest unreleased code instead, replace `med-lit-mcp` with `--from gi
 
 Claude Desktop installs Python and the server's dependencies itself. To change a setting or add a key later, open the extension in **Settings → Extensions**.
 
-### Hermes
+### Hermes or Claude Code, registered by hand
+
+`setup` runs these for you. To register by hand, first save your settings without registering (`uvx med-lit-mcp setup --no-register`), then:
 
 ```bash
-hermes mcp add med-lit --command uvx \
-  --env NCBI_EMAIL=you@example.org \
-  --connect-timeout 180 \
-  --args med-lit-mcp
-hermes mcp test med-lit
+hermes mcp add med-lit --command uvx --connect-timeout 180 --args med-lit-mcp
+claude mcp add med-lit --scope user -- uvx med-lit-mcp
 ```
 
-`--env` must come before `--args`, because `--args` takes everything after it. Hermes passes an MCP server only the variables given with `--env` (plus basics such as `PATH` and `HOME`), so add optional keys there too, for example `--env NCBI_EMAIL=… NCBI_API_KEY=…`.
-
-### Claude Code
-
-```bash
-claude mcp add med-lit --scope user -e NCBI_EMAIL=you@example.org -- \
-  uvx med-lit-mcp
-```
+In Hermes, `--env` must come before `--args`, because `--args` takes everything after it. Hermes passes an MCP server only basics such as `PATH` and `HOME` plus the variables given with `--env`; med-lit reads its settings and keys from `~/.config/med-lit-mcp/`, so none need to be passed.
 
 ### Claude Desktop (manual configuration)
 
@@ -67,7 +74,7 @@ Instead of the extension, you can add the server to `claude_desktop_config.json`
 
 ## Settings
 
-All settings are environment variables passed in the MCP client configuration.
+`setup` stores your email and reviews folder in `~/.config/med-lit-mcp/config.json` and your keys in `keys.json` next to it. Environment variables set in an MCP client's configuration take precedence over both.
 
 | Variable | Purpose |
 |---|---|

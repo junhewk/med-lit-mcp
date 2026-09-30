@@ -18,6 +18,7 @@ from . import (
     __version__,
     config,
     fetch,
+    keys,
     projects,
     runs,
     screening,
@@ -485,9 +486,9 @@ def check() -> int:
         "new_projects_in": str(config.projects_dir()),
         "projects": projects.list_projects(),
         "database_schema": len(MIGRATIONS),
+        "config_dir": str(keys.config_dir()),
         "ncbi_email": bool(config.ncbi_email()),
-        "ncbi_api_key": bool(config.ncbi_api_key()),
-        "semantic_scholar_api_key": search.semantic_scholar_key(),
+        "keys": {row["key"]: row["source"] for row in keys.status()},
         "stages": list(apply_stages()),
         "tools": len(mcp._tool_manager.list_tools()),
     }
@@ -498,7 +499,16 @@ def check() -> int:
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="med-lit-mcp", description="med-lit-mcp stdio MCP server")
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] in (["setup"], ["keys"]):
+        from .cli_setup import main as cli_main
+
+        raise SystemExit(cli_main(argv))
+    keys.load_into_environ()
+    parser = argparse.ArgumentParser(
+        prog="med-lit-mcp",
+        description="med-lit-mcp stdio MCP server. Other commands: setup, keys.",
+    )
     parser.add_argument("--version", action="version", version=f"med-lit-mcp {__version__}")
     parser.add_argument("--check", action="store_true", help="Print configuration and exit")
     args = parser.parse_args(argv)

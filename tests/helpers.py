@@ -48,6 +48,7 @@ class Case(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if not k.startswith(("NCBI_", "MED_LIT_"))}
         env.update(
             MED_LIT_STATE_DIR=str(self.root / "state"),
+            MED_LIT_CONFIG_DIR=str(self.root / "config"),
             MED_LIT_PROJECTS_DIR=str(self.root / "projects"),
             NCBI_EMAIL="tester@example.org",
         )

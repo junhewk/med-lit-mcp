@@ -38,6 +38,7 @@ extend-select = ["T20"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/med_lit_mcp/web.py" = ["T201"]
+"src/med_lit_mcp/cli_setup.py" = ["T201"]
 # Search engine merged from hermes-medical-search 0.2.1; its CLI prints to the log files of the
 # background search process, never to the MCP stdio pipe.
 "src/med_lit_mcp/medsearch/*" = ["T201", "BLE001", "DTZ007", "DTZ011", "FURB167", "ISC004", "PYI034", "TRY004"]
