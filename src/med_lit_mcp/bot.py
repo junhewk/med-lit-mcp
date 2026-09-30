@@ -278,6 +278,21 @@ def _syntheses_since(project: Project, started_at: str) -> list[dict[str, Any]]:
         ]
 
 
+def synthesis_allowance(project: Project) -> int | None:
+    """Entity pages the running bot run may still write, or None outside a bot run."""
+    if project.mode != "bot":
+        return None
+    try:
+        active = read_state(project).get("active")
+    except (OSError, ValueError):
+        return None
+    if not active:
+        return None
+    settings = load_settings(project.root)
+    assert settings.bot is not None
+    return max(0, settings.bot.max_syntheses - len(_syntheses_since(project, active["started_at"])))
+
+
 def bot_next(name: str | None) -> dict[str, Any]:
     project = _bot_project(name)
     settings = load_settings(project.root)
@@ -325,9 +340,9 @@ def bot_next(name: str | None) -> dict[str, Any]:
                 f"bot_next(project={project.name!r})."
             ),
         }
-    allowance = settings.bot.max_syntheses - len(_syntheses_since(project, active["started_at"]))
+    allowance = synthesis_allowance(project) or 0
     try:
-        plan = wiki.work_plan(run_id, max_syntheses=max(0, allowance))
+        plan = wiki.work_plan(run_id, max_syntheses=allowance)
     except ValueError:
         return _finish_step(project, "no included articles with text yet")
     if plan["step"] == "export":
@@ -371,7 +386,7 @@ def _render_report(project: Project, facts: dict[str, Any]) -> str:
     ]
     if facts["syntheses"]:
         lines += ["", "## Entity pages", ""]
-        lines += [f"- [[{s['entity']}]]" + (" (rewritten)" if s["version"] > 1 else " (new)") for s in facts["syntheses"]]
+        lines += [f"- [[{s['entity']}]]" + (" (updated)" if s["version"] > 1 else " (new)") for s in facts["syntheses"]]
     if facts["new_included"]:
         lines += ["", "## Newly included", ""]
         lines += [f"- {a['title']} [{a['uid']}]" for a in facts["new_included"]]
@@ -379,6 +394,10 @@ def _render_report(project: Project, facts: dict[str, Any]) -> str:
         lines += ["", f"## Waiting for your decision ({len(facts['awaiting_review'])})", ""]
         lines += [f"- {a['title']} [{a['uid']}]: {a['reason']}" for a in facts["awaiting_review"][:30]]
         lines += ["", "Decide them in a chat with review_article; the bot never decides uncertain articles."]
+    if facts["no_identifier"]:
+        lines += ["", f"## Skipped: no DOI or PMID ({len(facts['no_identifier'])})", ""]
+        lines += [f"- {entry['title']} [{entry['uid']}]: {entry['reason']}" for entry in facts["no_identifier"][:20]]
+        lines += ["", "Each is looked up again when a later search finds it, in case a DOI has been registered."]
     if facts["withdrawn"]:
         lines += ["", "## Withdrawn from the wiki (now excluded)", ""]
         lines += [f"- [{uid}]" for uid in facts["withdrawn"]]
@@ -447,6 +466,9 @@ def bot_finish(name: str | None) -> dict[str, Any]:
         "new_articles": update.get("new_articles", 0),
         "dropped_over_cap": len(update.get("dropped_over_cap", [])),
         "cap": update.get("cap"),
+        "no_identifier": [
+            entry for entry in manifest.get("skipped_no_identifier", []) if entry["uid"] in set(update.get("no_identifier", []))
+        ],
         "search_error": update.get("error") or export_error,
         "source_failures": update.get("source_failures"),
         "truncated_sources": update.get("truncated_sources"),
@@ -467,7 +489,7 @@ def bot_finish(name: str | None) -> dict[str, Any]:
         },
     }
     quiet = not (
-        facts["new_articles"] or facts["screened"] or facts["syntheses"] or facts["withdrawn"]
+        facts["new_articles"] or facts["screened"] or facts["syntheses"] or facts["withdrawn"] or facts["no_identifier"]
         or facts["search_error"] or facts["source_failures"]
     )
     report = None

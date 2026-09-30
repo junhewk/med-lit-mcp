@@ -172,7 +172,7 @@ class StdioTests(unittest.IsolatedAsyncioTestCase):
                 env={**os.environ, "MED_LIT_STATE_DIR": data, "MED_LIT_CONFIG_DIR": data, "NCBI_EMAIL": ""},
             )
         report = json.loads(completed.stdout)
-        self.assertEqual((report["database_schema"], report["ncbi_email"], report["tools"]), (1, False, 30))
+        self.assertEqual((report["database_schema"], report["ncbi_email"], report["tools"]), (2, False, 30))
         self.assertEqual(report["projects"], [])
         self.assertEqual(report["stages"], ["search", "screening", "fetch", "wiki"])
         self.assertIn("NCBI_EMAIL", completed.stderr)

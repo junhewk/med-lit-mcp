@@ -103,6 +103,9 @@ for the next step. See guide "extraction", "duplicates" and "synthesis" for the 
   language models) only when the page substantively depicts them. An empty list is valid.
 - Never extract publication metadata: years, PMID/PMCID/DOI, licenses, copyright, journal or
   publisher names, dates, or generic words such as article, paper, study, source.
+- Never extract tools used only to run the study: statistics and survey software (SPSS, Stata, R,
+  GraphPad Prism, NVivo, REDCap, Qualtrics). Extract a PLACE or ORGANIZATION only when the article
+  says something about it, not when it is merely where the study was done or who funded it.
 - name: the canonical name. Expand acronyms except well-known ones (FDA, WHO);
   "expansion (ACRONYM)" records both. Reuse a known_entities name, or pass its id as entity_id.
 - mention: a verbatim span from this page naming the entity. description: 1-2 sentences on how
@@ -124,13 +127,23 @@ spelling or plural variants. Keep generic and specific terms distinct (machine l
 learning; decision aid vs patient decision aid). resolve_duplicates takes merge or distinct per pair;
 merge_entities can also rename or retype an entity.""",
     "synthesis": """\
-# Writing an entity page
+# Writing and updating an entity page
 
-Write only from the next_synthesis context, in a neutral encyclopedic tone, describing how the
-gathered articles depict the entity rather than a generic definition. Sections: Overview, How
-Gathered Articles Depict It, Recurring Themes, Tensions and Limitations, Relationships. Use the
-PICO/PCC roles to say how studies used the entity. Cite sources inline as [uid], only uids from the
-context; link other entities as [[Name]]. Pass the same entity_id and input_digest to record_synthesis.""",
+next_synthesis returns mode "new" or "update".
+
+- new: write only from the context, in a neutral encyclopedic tone, describing how the gathered
+  articles depict the entity rather than a generic definition. Sections, as '## ' headings: Overview,
+  How Gathered Articles Depict It, Recurring Themes, Tensions and Limitations, Relationships. Use the
+  PICO/PCC roles to say how studies used the entity. Send summary, synthesis, key_aspects and
+  related_entities.
+- update: the page exists (current_synthesis). The mentions are only the evidence added since it was
+  written; removed_sources were withdrawn. Do not rewrite the page: change only the sections the new
+  evidence affects, delete statements citing removed sources, and send just those sections as
+  `sections` ({heading: full new text of the section}). Everything else is kept as it is. Send
+  summary or key_aspects only if they change.
+
+Cite sources inline as [uid], only uids from the context; link other entities as [[Name]]. Pass the
+same entity_id and input_digest to record_synthesis.""",
     "ontology": f"""\
 # Entity types and roles (ontology med-lit/1)
 

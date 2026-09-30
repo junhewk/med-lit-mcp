@@ -36,7 +36,10 @@ EXCLUDED_NAMES = frozenset(
     pmc-release|publication|publications|pubmed|research article|journal article|
     jmir publications inc.|nature publishing group|scientific reports|springer|source|sources|
     study|studies|this study|the study|authors' contributions|conflict of interest|
-    funding|acknowledgements|acknowledgments|references|supplementary material""".replace("\n", "")
+    funding|acknowledgements|acknowledgments|references|supplementary material|
+    spss|ibm spss|ibm spss statistics|spss statistics|stata|sas|graphpad|graphpad prism|prism|nvivo|
+    microsoft excel|excel|r software|r statistical software|jamovi|jasp|atlas.ti|maxqda|
+    python software|redcap|qualtrics""".replace("\n", "")
     .split("|")
 )
 EXCLUDED_NAMES = frozenset(" ".join(name.split()) for name in EXCLUDED_NAMES)
@@ -228,8 +231,9 @@ def _page_header(
         "instructions": (
             "Extract 5-18 substantive entities from this page with record_extraction. Each mention "
             "and relationship evidence must be copied verbatim from the page. Reuse a known entity's "
-            "name or pass its id as entity_id. Never extract publication metadata. An empty list is "
-            "valid for a page with nothing substantive."
+            "name or pass its id as entity_id. Never extract publication metadata, statistics software "
+            "(SPSS, Stata, R, GraphPad Prism), or places and institutions named only as where the study "
+            "was done or who funded it. An empty list is valid for a page with nothing substantive."
         ),
     }
     if row["content_type"] == "abstract_only":
@@ -706,8 +710,45 @@ def resolve_duplicates(project: Project, decisions: list[dict[str, Any]]) -> dic
     return {"results": results, "pending_duplicates": pending}
 
 
+def _coverage(conn: sqlite3.Connection, entity_id: int) -> tuple[set[int], set[str]]:
+    """Mentions and sources an entity's current page was written from."""
+    covered = {r[0] for r in conn.execute("SELECT mention_id FROM kg_synthesis_mentions WHERE entity_id=?", (entity_id,))}
+    row = conn.execute("SELECT sources_json FROM kg_syntheses WHERE entity_id=?", (entity_id,)).fetchone()
+    return covered, set(json.loads(row[0] or "[]")) if row else set()
+
+
+def _pending(conn: sqlite3.Connection, entity_id: int) -> dict[str, Any]:
+    """What a written page does not reflect yet: new mentions and withdrawn sources.
+
+    An update is due for new mentions that say something about the entity; a mention whose role
+    is only the study's setting ("context") does not by itself change the page."""
+    covered, cited = _coverage(conn, entity_id)
+    rows = conn.execute("SELECT id, article_uid, role FROM kg_mentions WHERE entity_id=?", (entity_id,)).fetchall()
+    new = [row for row in rows if row["id"] not in covered]
+    removed = sorted(cited - {row["article_uid"] for row in rows})
+    substantive = [row for row in new if row["role"] != "context"]
+    return {"new": new, "substantive": len(substantive), "removed": removed, "due": bool(substantive or removed)}
+
+
+def _absorb(conn: sqlite3.Connection, entity_id: int, pending: dict[str, Any]) -> None:
+    """Mark setting-only new mentions as covered: the page's source list shows them already."""
+    with transaction(conn):
+        conn.executemany(
+            "INSERT OR IGNORE INTO kg_synthesis_mentions (entity_id, mention_id) VALUES (?, ?)",
+            [(entity_id, row["id"]) for row in pending["new"]],
+        )
+        sources = sorted({r[0] for r in conn.execute("SELECT DISTINCT article_uid FROM kg_mentions WHERE entity_id=?", (entity_id,))})
+        conn.execute("UPDATE kg_syntheses SET stale=0, sources_json=? WHERE entity_id=?", (json.dumps(sources), entity_id))
+
+
 def synthesis_context(conn: sqlite3.Connection, entity_id: int) -> dict[str, Any]:
+    """The evidence for writing a new entity page, or for updating a written one.
+
+    mode "new": all mentions (up to the limits). mode "update": the current page in full plus only
+    the mentions added since it was written, and the sources withdrawn since."""
     brief = _entity_brief(conn, entity_id)
+    current = conn.execute("SELECT * FROM kg_syntheses WHERE entity_id=?", (entity_id,)).fetchone()
+    covered, cited = _coverage(conn, entity_id) if current else (set(), set())
     rows = conn.execute(
         """SELECT m.id, m.article_uid, m.page_index, m.mention_text, m.context, m.description, m.role,
                   a.title, a.pub_date, a.content_type
@@ -725,12 +766,18 @@ def synthesis_context(conn: sqlite3.Connection, entity_id: int) -> dict[str, Any
             "year": str(group[0]["pub_date"] or "")[:4] or None,
             "content_type": group[0]["content_type"],
             "roles": sorted({row["role"] for row in group if row["role"]}),
+            **({"new": uid not in cited} if current else {}),
         }
         for uid, group in by_article.items()
     ]
+    pool: dict[str, list[sqlite3.Row]] = {}
+    for uid, group in by_article.items():
+        fresh = [row for row in group if row["id"] not in covered]
+        if fresh:
+            pool[uid] = fresh
     mentions, used = [], 0
-    for depth in range(max((len(group) for group in by_article.values()), default=0)):
-        for group in by_article.values():
+    for depth in range(max((len(group) for group in pool.values()), default=0)):
+        for group in pool.values():
             if depth < len(group) and len(mentions) < MENTION_LIMIT:
                 row = group[depth]
                 size = len(row["context"]) + len(row["description"] or "")
@@ -743,6 +790,7 @@ def synthesis_context(conn: sqlite3.Connection, entity_id: int) -> dict[str, Any
                         "context": row["context"], "description": row["description"],
                     }
                 )
+    removed = sorted(cited - set(by_article)) if current else []
     relations = []
     for row in conn.execute(
         """SELECT r.id, r.relationship_type, r.source_entity_id, r.target_entity_id, r.detail,
@@ -772,7 +820,6 @@ def synthesis_context(conn: sqlite3.Connection, entity_id: int) -> dict[str, Any
                 "evidence": row["evidence"],
             }
         )
-    current = conn.execute("SELECT * FROM kg_syntheses WHERE entity_id=?", (entity_id,)).fetchone()
     digest = hashlib.sha256(
         json.dumps(
             {
@@ -780,28 +827,41 @@ def synthesis_context(conn: sqlite3.Connection, entity_id: int) -> dict[str, Any
                 "relations": [(r["id"], r["source_count"]) for r in relations],
                 "aliases": brief["aliases"],
                 "sources": [s["uid"] for s in sources],
+                "removed": removed,
                 "version": current["version"] if current else 0,
             }
         ).encode()
     ).hexdigest()
-    return brief | {
+    context = brief | {
+        "mode": "update" if current else "new",
         "input_digest": digest,
         "sources": sources,
         "mentions": mentions,
         "relationships": relations,
-        "current_synthesis": (current["synthesis"][:6000] if current else None),
         "version": current["version"] if current else 0,
     }
+    if current:
+        context |= {
+            "removed_sources": removed,
+            "current_summary": current["summary"],
+            "current_key_aspects": json.loads(current["key_aspects_json"]),
+            "current_synthesis": current["synthesis"],
+            "current_sections": [heading for heading, _ in _sections(current["synthesis"]) if heading],
+        }
+    return context
 
 
 def _synthesis_queue(conn: sqlite3.Connection, uids: list[str] | None, min_sources: int) -> tuple[list[int], int]:
+    """Entities whose page is due: new pages first (most sources first), then updates (most new
+    evidence first). Written pages whose only new evidence names the setting are marked current."""
     rows = conn.execute(
-        """SELECT e.id, e.canonical_name,
+        """SELECT e.id, e.canonical_name, s.source_count, y.entity_id IS NOT NULL AS written,
                   EXISTS (SELECT 1 FROM kg_duplicate_candidates d WHERE d.status='pending'
                           AND (d.entity_id=e.id OR d.candidate_id=e.id)) AS blocked
            FROM kg_entities e JOIN kg_entity_stats s ON s.entity_id = e.id
            LEFT JOIN kg_syntheses y ON y.entity_id = e.id
-           WHERE e.entity_type != 'PERSON' AND s.source_count >= ? AND (y.entity_id IS NULL OR y.stale = 1)
+           WHERE e.entity_type != 'PERSON'
+             AND ((y.entity_id IS NULL AND s.source_count >= ?) OR y.stale = 1)
            ORDER BY s.source_count DESC, e.id""",
         (min_sources,),
     ).fetchall()
@@ -809,15 +869,41 @@ def _synthesis_queue(conn: sqlite3.Connection, uids: list[str] | None, min_sourc
     if uids is not None:
         marks = ",".join("?" * len(uids))
         allowed = {r[0] for r in conn.execute(f"SELECT DISTINCT entity_id FROM kg_mentions WHERE article_uid IN ({marks})", uids)}
-    queue, blocked = [], 0
+    new, updates, blocked = [], [], 0
     for row in rows:
         if is_junk_name(row["canonical_name"]) or (allowed is not None and row["id"] not in allowed):
             continue
+        if row["written"]:
+            pending = _pending(conn, row["id"])
+            if not pending["due"]:
+                _absorb(conn, row["id"], pending)
+                continue
         if row["blocked"]:
             blocked += 1
+        elif row["written"]:
+            updates.append((-(pending["substantive"] + len(pending["removed"])), row["id"]))
         else:
-            queue.append(row["id"])
-    return queue, blocked
+            new.append(row["id"])
+    return new + [entity_id for _, entity_id in sorted(updates)], blocked
+
+
+NEW_PAGE = (
+    "Write from these mentions only, in a neutral encyclopedic tone, describing how the gathered "
+    "articles depict the entity. Sections (as '## ' headings): Overview, How Gathered Articles Depict It, "
+    "Recurring Themes, Tensions and Limitations, Relationships. Mentions and sources carry the entity's "
+    "PICO/PCC role in each study (for example intervention or outcome); use them to say how studies used "
+    "it. Cite sources inline as [uid]; link other entities as [[Name]]. Call record_synthesis with "
+    "summary, synthesis, key_aspects and related_entities, passing input_digest back."
+)
+UPDATE_PAGE = (
+    "This entity already has a page (current_synthesis). Update it; do not rewrite it. `mentions` are only "
+    "the evidence added since the page was written (sources marked new: true); removed_sources were "
+    "withdrawn from the review. Change only the sections this evidence affects: add what the new "
+    "sources show, citing them as [uid], and delete every statement citing a removed source. Keep all "
+    "other text as it is. Call record_synthesis with `sections`: only the changed sections, as "
+    "{heading: full new text of that section} (use the current_sections headings; a new heading adds a "
+    "section). Pass summary or key_aspects only if they change. Pass input_digest back."
+)
 
 
 def next_synthesis(
@@ -834,6 +920,10 @@ def next_synthesis(
             if manifest.get("wiki_min_sources") != min_sources:
                 manifest["wiki_min_sources"] = min_sources
                 save_run(path, manifest)
+    from .bot import synthesis_allowance
+
+    if synthesis_allowance(project) == 0:
+        return {"done": True, "note": "This bot run has written its entity pages (bot.max_syntheses); the rest wait for the next run"}
     with database(project.db) as conn:
         queue, blocked = _synthesis_queue(conn, uids, min_sources)
         if not queue:
@@ -848,66 +938,129 @@ def next_synthesis(
         return {"project": project.name} | context | {
             "remaining": len(queue),
             "skipped_pending_duplicates": blocked,
-            "instructions": (
-                "Write from these mentions only, in a neutral encyclopedic tone, describing how the "
-                "gathered articles depict the entity. Sections: Overview, How Gathered Articles Depict "
-                "It, Recurring Themes, Tensions and Limitations, Relationships. Mentions and sources carry "
-                "the entity's PICO/PCC role in each study (for example intervention or outcome); use them "
-                "to say how studies used it. Cite sources inline as [uid]; link other entities as [[Name]]. "
-                "Pass input_digest back to record_synthesis."
-            ),
+            "instructions": UPDATE_PAGE if context["mode"] == "update" else NEW_PAGE,
         }
+
+
+def _sections(text: str) -> list[tuple[str, str]]:
+    """(heading, block) pairs of a page's '## ' sections; the first pair holds any preamble."""
+    parts = re.split(r"(?m)^(?=## )", text)
+    result = []
+    for part in parts:
+        first = part.split("\n", 1)[0]
+        heading = first[3:].strip() if first.startswith("## ") else ""
+        result.append((heading, part))
+    return result
+
+
+def _patch_sections(text: str, sections: dict[str, str]) -> str:
+    """Replace the named sections of a page (matched case-insensitively); new headings are added
+    at the end and an empty text removes a section."""
+    parts = _sections(text)
+    index = {heading.casefold(): number for number, (heading, _) in enumerate(parts) if heading}
+    for name, body in sections.items():
+        heading = name.strip().lstrip("#").strip()
+        if not heading:
+            raise ValueError("Every section needs a heading")
+        body = body.strip()
+        first, _, rest = body.partition("\n")
+        if first.startswith("#") and first.lstrip("#").strip().casefold() == heading.casefold():
+            body = rest.strip()
+        block = f"## {heading}\n\n{body}\n\n" if body else ""
+        if heading.casefold() in index:
+            number = index[heading.casefold()]
+            parts[number] = (parts[number][0], block)
+        elif body:
+            parts.append((heading, block))
+    return "".join(block if block.endswith("\n") or not block else block + "\n" for _, block in parts).strip() + "\n"
 
 
 def record_synthesis(
     project: Project,
     entity_id: int,
     input_digest: str,
-    summary: str,
-    synthesis: str,
-    key_aspects: list[str],
-    related_entities: list[dict[str, Any]],
+    summary: str | None = None,
+    synthesis: str | None = None,
+    key_aspects: list[str] | None = None,
+    related_entities: list[dict[str, Any]] | None = None,
     *,
+    sections: dict[str, str] | None = None,
     client: str | None = None,
 ) -> dict[str, Any]:
+    """Save a new page, or an update: changed `sections` patched into the current page (or a full
+    `synthesis`). The page then covers the evidence its context showed."""
+    from .bot import synthesis_allowance
     from .wiki_export import export_entity
+
+    if synthesis_allowance(project) == 0:
+        raise ValueError("This bot run has written its entity pages (bot.max_syntheses); stop and report done")
 
     with database(project.db) as conn:
         context = synthesis_context(conn, entity_id)
         if context["input_digest"] != input_digest:
             raise ValueError("The entity's evidence changed; call next_synthesis again")
+        current = conn.execute("SELECT * FROM kg_syntheses WHERE entity_id=?", (entity_id,)).fetchone()
+        if current is None:
+            if sections or not (summary and synthesis and key_aspects):
+                raise ValueError("A new page needs summary, synthesis and key_aspects (sections are for updates)")
+            text = synthesis
+        else:
+            if sections and synthesis:
+                raise ValueError("Give either sections (the changed ones) or a full synthesis, not both")
+            if not sections and not synthesis:
+                raise ValueError("Give the changed sections as {heading: text}")
+            text = _patch_sections(current["synthesis"], sections) if sections else synthesis
+            summary = summary or current["summary"]
+            key_aspects = key_aspects or json.loads(current["key_aspects_json"])
         sources = {source["uid"] for source in context["sources"]}
-        cited = set(CITATION.findall(synthesis))
+        cited = set(CITATION.findall(text))
         if not cited:
             raise ValueError("Cite at least one source inline as [uid], e.g. [pmc:PMC123]")
         unknown = sorted(cited - sources)
         if unknown:
-            raise ValueError(f"Citations are not sources of this entity: {', '.join(unknown)}")
+            where = sorted({h or "(top)" for h, block in _sections(text) if any(f"[{uid}]" in block for uid in unknown)})
+            withdrawn = [uid for uid in unknown if uid in context.get("removed_sources", [])]
+            note = f" ({', '.join(withdrawn)} withdrawn from the review)" if withdrawn else ""
+            raise ValueError(
+                f"Citations are not sources of this entity: {', '.join(unknown)}{note}; fix sections: {', '.join(where)}"
+            )
         warnings = []
-        for name in WIKI_LINK.findall(synthesis):
+        for name in WIKI_LINK.findall(text):
             if not _lookup(conn, name_key(name)):
                 warnings.append(f"[[{name}]] does not match a known entity and will be plain text")
-        related = []
-        for entry in related_entities:
-            found = _lookup(conn, name_key(entry["name"]))
-            related.append(entry | {"entity_id": found["id"] if found else None})
+        if related_entities is None and current is not None:
+            related = json.loads(current["related_entities_json"])
+        else:
+            related = []
+            for entry in related_entities or []:
+                found = _lookup(conn, name_key(entry["name"]))
+                related.append(entry | {"entity_id": found["id"] if found else None})
         with transaction(conn):
             conn.execute(
                 """INSERT INTO kg_syntheses (entity_id, summary, synthesis, key_aspects_json, related_entities_json,
-                     input_digest, source_article_count, stale, version, client, compiled_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?)
+                     input_digest, source_article_count, stale, version, client, compiled_at, sources_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, ?)
                    ON CONFLICT(entity_id) DO UPDATE SET summary=excluded.summary, synthesis=excluded.synthesis,
                      key_aspects_json=excluded.key_aspects_json, related_entities_json=excluded.related_entities_json,
                      input_digest=excluded.input_digest, source_article_count=excluded.source_article_count,
-                     stale=0, version=kg_syntheses.version + 1, client=excluded.client, compiled_at=excluded.compiled_at""",
+                     stale=0, version=kg_syntheses.version + 1, client=excluded.client,
+                     compiled_at=excluded.compiled_at, sources_json=excluded.sources_json""",
                 (
-                    entity_id, summary.strip(), synthesis.strip(), json.dumps(key_aspects, ensure_ascii=False),
+                    entity_id, summary.strip(), text.strip(), json.dumps(key_aspects, ensure_ascii=False),
                     json.dumps(related, ensure_ascii=False), input_digest, len(sources), client, now(),
+                    json.dumps(sorted(sources)),
                 ),
             )
+            conn.executemany(
+                "INSERT OR IGNORE INTO kg_synthesis_mentions (entity_id, mention_id) VALUES (?, ?)",
+                [(entity_id, mention["id"]) for mention in context["mentions"]],
+            )
+            # Evidence beyond this context's limits is still uncovered: the page stays due.
+            if _pending(conn, entity_id)["new"]:
+                conn.execute("UPDATE kg_syntheses SET stale=1 WHERE entity_id=?", (entity_id,))
         page = export_entity(project, conn, entity_id)
         version = conn.execute("SELECT version FROM kg_syntheses WHERE entity_id=?", (entity_id,)).fetchone()[0]
-    return {"entity_id": entity_id, "version": version, "page": str(page), "warnings": warnings}
+    return {"entity_id": entity_id, "mode": context["mode"], "version": version, "page": str(page), "warnings": warnings}
 
 
 def _finish_articles(run_id: str) -> None:
@@ -1002,10 +1155,11 @@ def work_plan(run_id: str, max_syntheses: int | None = None) -> dict[str, Any]:
                 f"med-lit wiki synthesis, project {project.name!r}, run {run_id}. Up to {size} times: "
                 f"call next_synthesis(project={project.name!r}, run_id='{run_id}', min_sources={min_sources}); "
                 "stop if it reports done. "
-                "Write a neutral article describing how the gathered sources depict the entity (sections: "
-                "Overview, How Gathered Articles Depict It, Recurring Themes, Tensions and Limitations, "
-                "Relationships), citing sources inline as [uid] and linking entities as [[Name]], then call "
-                "record_synthesis(project={project.name!r}, ...) with the same entity_id and input_digest. " + common
+                "Follow its instructions: for mode 'new', write a neutral page describing how the gathered "
+                "sources depict the entity; for mode 'update', change only the sections the new evidence "
+                "affects and send just those as `sections`. Cite sources inline as [uid], link entities as "
+                f"[[Name]], and call record_synthesis(project={project.name!r}, ...) with the same entity_id "
+                "and input_digest. " + common
             )
             for size in sizes
         ]

@@ -153,6 +153,25 @@ MIGRATIONS = [
              COUNT(DISTINCT m.article_uid) AS source_count
       FROM kg_entities e LEFT JOIN kg_mentions m ON m.entity_id = e.id GROUP BY e.id;
     """,
+    # Entity pages are updated with new evidence instead of rewritten: record which mentions and
+    # sources each page covers. Existing pages cover what was extracted before they were written.
+    """
+    CREATE TABLE kg_synthesis_mentions (
+      entity_id INTEGER NOT NULL REFERENCES kg_syntheses(entity_id) ON DELETE CASCADE,
+      mention_id INTEGER NOT NULL REFERENCES kg_mentions(id) ON DELETE CASCADE,
+      PRIMARY KEY (entity_id, mention_id));
+    ALTER TABLE kg_syntheses ADD COLUMN sources_json TEXT;
+    INSERT OR IGNORE INTO kg_synthesis_mentions (entity_id, mention_id)
+      SELECT y.entity_id, m.id FROM kg_syntheses y
+      JOIN kg_mentions m ON m.entity_id = y.entity_id
+      JOIN articles a ON a.uid = m.article_uid
+      JOIN kg_extraction_pages p ON p.article_uid = m.article_uid AND p.page_index = m.page_index
+        AND p.content_sha256 = a.content_sha256
+      WHERE p.recorded_at <= y.compiled_at;
+    UPDATE kg_syntheses SET sources_json = (
+      SELECT json_group_array(DISTINCT m.article_uid) FROM kg_synthesis_mentions c
+      JOIN kg_mentions m ON m.id = c.mention_id WHERE c.entity_id = kg_syntheses.entity_id);
+    """,
 ]
 
 

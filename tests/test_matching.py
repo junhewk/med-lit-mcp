@@ -58,3 +58,12 @@ class MatchingTests(unittest.TestCase):
         self.assertFalse(contains_verbatim("abc", " "))
         scanner = AliasScanner([("large language model", 1), ("sdm", 2), ("a", 3)])
         self.assertEqual(scanner.scan("Large language models support SDM; SDM again."), {1: 1, 2: 2})
+
+
+class JunkNameTests(unittest.TestCase):
+    def test_statistics_software_is_never_an_entity(self) -> None:
+        from med_lit_mcp.wiki import is_junk_name
+
+        for name in ("SPSS", "IBM SPSS Statistics", "GraphPad Prism", "Stata", "REDCap"):
+            self.assertTrue(is_junk_name(name), name)
+        self.assertFalse(is_junk_name("ChatGPT"))

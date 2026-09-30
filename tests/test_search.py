@@ -241,3 +241,56 @@ class KnownArticleTests(Case):
         twin = {"source": "openalex", "source_id": "W9", "doi": "10.1/example.9", "title": "Twin"}
         result = self.search([record(9), twin])
         self.assertEqual((result["candidates"], result["already_known"]), (1, 0))
+
+
+class IdentifierTests(Case):
+    def search(self, records: list[dict[str, Any]]) -> dict[str, Any]:
+        def launch(argv: list[str], **kwargs: Any) -> FakeProcess:
+            write_results(Path(argv[argv.index("--output") + 1]), records)
+            return FakeProcess(argv, write=False, **kwargs)
+
+        with patch.object(search.subprocess, "Popen", side_effect=launch):
+            return search.start_search(self.project, QUESTION, ["pubmed", "openalex"], wait_seconds=0)
+
+    def test_records_without_doi_or_pmid_are_looked_up_or_skipped(self) -> None:
+        index_copy = {"source": "openalex", "source_id": "W1", "title": "The Impact of AI-Based Educational Interventions on Learning"}
+        journal_copy = {**index_copy, "source_id": "W2", "title": index_copy["title"] + ": A Meta-Analysis"}
+        thesis = {"source": "openalex", "source_id": "W3", "title": "A thesis nobody indexed"}
+
+        def lookup(record: dict[str, Any]) -> tuple[dict[str, str] | None, str]:
+            if "Impact" in record["title"]:
+                return {"doi": "10.5195/ijms.4894"}, "Crossref title match"
+            return None, "no DOI or PMID found in PubMed or Crossref"
+
+        with patch.object(search, "find_identifiers", side_effect=lookup) as found:
+            first = self.search([index_copy, journal_copy, thesis, record(7)])
+        self.assertEqual(found.call_count, 3)  # record 7 has a PMID
+        manifest = read_json(run_dir(first["run_id"]) / RUN_FILE)
+        self.assertEqual(sorted(manifest["articles"]), ["openalex:W1", "pubmed:7"])  # the two copies became one
+        self.assertEqual(manifest["articles"]["openalex:W1"]["record"]["identifier_lookup"], "Crossref title match")
+        self.assertEqual([e["uid"] for e in manifest["skipped_no_identifier"]], ["openalex:W3"])
+        self.assertEqual(first["skipped_no_identifier"], 1)
+
+    def test_title_matching_is_strict(self) -> None:
+        title = "The Impact of AI-Based Educational Interventions on Academic Performance"
+        self.assertTrue(search.titles_match(title, title.upper() + "."))
+        self.assertTrue(search.titles_match(title, title + ": A Meta-Analysis"))
+        self.assertFalse(search.titles_match("Chatbots in education", "Chatbots in education: a review"))  # too short for a prefix
+        self.assertFalse(search.titles_match(title, "Impact of Team-Based Learning on Medical Students Academic Performance"))
+
+    def test_pubmed_and_crossref_lookups_read_their_answers(self) -> None:
+        title = "Effect of Large Language Model-Powered Virtual Standardized Patients on History-Taking"
+        answers = iter([
+            json.dumps({"esearchresult": {"idlist": ["42"]}}).encode(),
+            json.dumps({"result": {"42": {"title": title + ".", "pubdate": "2026 Aug",
+                                          "articleids": [{"idtype": "doi", "value": "10.2196/X"}]}}}).encode(),
+        ])
+        with patch.object(search, "safe_http", side_effect=lambda *a, **k: next(answers)), patch.object(search, "_ncbi_pause"):
+            self.assertEqual(search._pubmed_by_title(title, "2026"), {"pmid": "42", "doi": "10.2196/x", "pmcid": None})
+        crossref = {"message": {"items": [
+            {"DOI": "10.1/other", "title": ["Something else entirely about students"], "issued": {"date-parts": [[2026]]}},
+            {"DOI": "10.1/MATCH", "title": [title], "issued": {"date-parts": [[2025]]}},
+        ]}}
+        with patch.object(search, "safe_http", return_value=json.dumps(crossref).encode()):
+            self.assertEqual(search._crossref_by_title(title, "2026"), {"doi": "10.1/match"})
+            self.assertIsNone(search._crossref_by_title(title, "2020"))  # years too far apart

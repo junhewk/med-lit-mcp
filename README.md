@@ -174,15 +174,18 @@ How the stages work:
 - **Question structure.** Groups within a component are ANDed, and a group's synonyms are ORed. Give each separately required facet (for example technology and task) its own group; put only true synonyms in a group; leave out ambiguous bare acronyms such as `LLM` unless you approve them. PCC context is for the setting only. Groups can suggest candidate MeSH headings, which are checked against NCBI before use.
 - **Sources.** Unless you name sources, a search uses the defaults: PubMed, PMC and OpenAlex, plus Semantic Scholar and Scopus when their keys are set. Europe PMC is searched on its own, when you ask for it.
 - **Date range.** Without a `from_date` filter or a `search.years` setting, a search covers only the last three years. `validate_question` states the effective start date, so ask for an earlier one if you need it. Dates are applied to the day in every source except Scopus, which searches whole years; its results are then trimmed to the exact dates by cover date.
+- **Identifiers.** Every imported article has a DOI, PMID or PMCID: that is how one article is recognised across sources and searches, and how its full text is found. A record that arrives without one (some OpenAlex records, for example) is looked up in PubMed and then Crossref by its title; only the same title, or the same title plus a subtitle, published within a year, counts. Records still without an identifier are skipped and listed in the run's `skipped_no_identifier`, and looked up again whenever a later search finds them.
 - **Repeat searches.** A later search in the same project imports only articles new to the project, matched by DOI, PMID, PMCID or record id across sources. Articles an earlier search already found are counted as `already_known` and keep that search's screening decisions and wiki work.
 - **Scopus** returns abstracts and full author lists when your institution subscribes (the COMPLETE view); otherwise it falls back to titles and first authors only.
-- **Screening** uses titles and abstracts only. Include and exclude decisions need a verbatim quote from the record. A decision whose quote cannot be verified is stored as `uncertain`, and uncertain articles wait for the researcher's own decision.
+- **Screening** uses titles and abstracts only. Include and exclude decisions need a verbatim quote from the record, and an uncertain decision needs a reason naming the criterion that cannot be judged and what the record leaves open. A decision that fails these checks is stored as `uncertain` and can be corrected once; uncertain articles wait for the researcher's own decision.
 - **Changing criteria** requires `replace=true`, starts a new revision, and re-screens every article. Earlier decisions stay in the history.
 - **Fetch** tries PMC full text (NCBI, then Europe PMC). For articles without a PMCID it asks [Unpaywall](https://unpaywall.org) for legal open-access copies of the DOI, preferring a PMC copy and otherwise extracting text from an open-access PDF. The abstract is the last resort, and abstract-only articles are always labelled as such. Articles are fetched in search-rank order, so a `fetch.limit` keeps the best-ranked ones. The source, license and version (published, accepted or submitted) of each full text are recorded. To retry abstract-only articles later, ask for a fetch with `retry_abstract_only`.
 - **The wiki** is built from paged article text of about 12,000 characters per page, without truncation.
   - Each entity mention and relationship must be quoted verbatim from its page.
   - Entities are matched lexically: case, plurals, spelling variants and acronyms defined in the text, such as "large language models (LLMs)". Only exact key or acronym matches merge automatically. Near matches are queued as possible duplicates for the agent or researcher to merge or keep distinct.
-  - Syntheses must cite their sources as `[uid]`.
+  - Entity pages must cite their sources as `[uid]`.
+  - **Pages are updated, not rewritten.** Each page records the mentions it was written from. When later articles add evidence, the page is updated: the model gets the current page and only the new evidence, and returns just the sections that change; everything else stays as it was. New pages are written before updates. Evidence that only names an entity as a study's setting (for example *medical education* in an education study) does not reopen its page, and statements citing a withdrawn article must be removed.
+  - Statistics and survey software (SPSS, Stata, GraphPad Prism, REDCap…) is never an entity, and places or institutions become entities only when an article says something about them.
   - Entities, roles and relationships follow the ontology described [below](#entity-types-roles-and-relationships).
   - Article pages are large, so `wiki_tasks` splits the work into self-contained tasks: one per article, then duplicate review, then batches of five entity pages. Clients that can delegate (Hermes subagents, Claude Code agents) give each task to a fresh subagent, which keeps the main conversation short. Other clients work through the same tasks in order.
 
@@ -192,7 +195,7 @@ If some sources fail while others succeed (for example PMC answering HTTP 500 wh
 
 ## Bots: keep a review up to date (Hermes)
 
-A **bot project** re-runs a search you have already tried, on a schedule, and adds what is new: it screens new articles, fetches the included ones, extracts them into the wiki and rewrites the entity pages their evidence changes. Bots run as Hermes scheduled jobs; Claude Code and Claude Desktop have no scheduler for them.
+A **bot project** re-runs a search you have already tried, on a schedule, and adds what is new: it screens new articles, fetches the included ones, extracts them into the wiki and updates the entity pages their evidence changes. Bots run as Hermes scheduled jobs; Claude Code and Claude Desktop have no scheduler for them.
 
 **Before you start,** run a normal review in Hermes at least up to screening criteria (search, then "Screen it. Include … Exclude …"). A bot copies that search's question and criteria, so you begin from something you have seen work. Then:
 
@@ -209,11 +212,12 @@ To run a bot now instead of waiting for its time, answer yes to setup's last que
 
 **Each run:**
 - searches articles published in the look-back window (90 days by default, open-ended because journals date issues ahead) and takes in only articles new to the project: at most `max_new_articles`, best-ranked first. Articles over the cap are not marked as seen, so later runs pick them up while they are still in the window;
-- screens them against the frozen criteria, fetches and extracts the included ones, and writes or rewrites at most `max_syntheses` entity pages (those with at least `wiki.min_sources` source articles);
+- screens them against the frozen criteria, fetches and extracts the included ones, and writes or updates at most `max_syntheses` entity pages (those with at least `wiki.min_sources` source articles): new pages first, then updates with the new evidence. The server enforces the cap;
 - finishes all the work its caps allow, however long it takes. Two runs of the same bot never overlap; if a run is interrupted, the next one continues its unfinished work;
+- skips articles with no DOI, PMID or PMCID (listed in the report);
 - writes a report to `updates/<date>.md` in the project folder and replies with the same text, which Hermes saves under `~/.hermes/profiles/medlitbot/cron/output/<job id>/`. A run that found nothing stays silent and writes no report.
 
-**Choosing `max_new_articles`.** A run's length follows from its cap, not from the window. With a local model, a test bot took about 45 minutes for 5 new articles (3 included, 9 pages extracted, 9 entity pages written) and about 1 hour 50 minutes for 20 (15 included, 35 pages). A new bot's first window usually holds a backlog: 129 matching articles in the test's 90 days. The cap works through it a run at a time, best-ranked first, and the report lists how many are waiting. A small cap keeps each run short; the few lowest-ranked articles may leave the 90-day window before a run reaches them.
+**Choosing `max_new_articles`.** A run's length follows from its cap, not from the window. With a local model, a test bot took about 45 minutes for 5 new articles (3 included, 9 pages extracted, 9 entity pages written) and about 1 hour 50 minutes for 20 (15 included, 35 pages). Those runs predate page updates, when new evidence made central pages be rewritten in full. A new bot's first window usually holds a backlog: 129 matching articles in the test's 90 days. The cap works through it a run at a time, best-ranked first, and the report lists how many are waiting. A small cap keeps each run short; the few lowest-ranked articles may leave the 90-day window before a run reaches them.
 
 **Uncertain articles wait for you.** The bot never decides them; the report lists them with the bot's reasons. Open the bot project in a normal chat ("show the uncertain articles in SDM watch") and decide them with `review_article`; the next run fetches and adds the ones you include.
 
@@ -222,7 +226,7 @@ To run a bot now instead of waiting for its time, answer yes to setup's last que
 | Change | What happens |
 |---|---|
 | Schedule; caps, look-back, records per source | Applies from the next run. |
-| Screening criteria (opens your editor) | A new criteria revision. The next runs re-screen everything collected; articles that become excludes are withdrawn from the wiki and the entity pages that cited them are rewritten. |
+| Screening criteria (opens your editor) | A new criteria revision. The next runs re-screen everything collected; articles that become excludes are withdrawn from the wiki, and the entity pages that cited them are updated to drop them. |
 | Search question (copied from another search, or edited) | A new question version. The next run searches again from the bot's start date with it; known articles are skipped. |
 | Pause or resume | Pauses or resumes the Hermes job. |
 | Archive | Removes the schedule. The folder, wiki, reports and history stay; delete the folder yourself if you no longer want it. |
@@ -233,7 +237,7 @@ Every question and criteria version is kept in `.med-lit/bot.json`. A normal cha
 |---|---|---|
 | `bot.lookback_days` | 90 | Publication-date window of each run. |
 | `bot.max_new_articles` | 20 | New articles taken in per run. |
-| `bot.max_syntheses` | 15 | Entity pages written or rewritten per run. |
+| `bot.max_syntheses` | 15 | Entity pages written or updated per run. |
 | `search.per_source` | 100 | Records requested per source. A bot sees new articles only among these, so the report warns when a source had more matches. |
 
 Set your own defaults for new bots under `"bot"` in `defaults.json` (see [Review settings](#review-settings)).

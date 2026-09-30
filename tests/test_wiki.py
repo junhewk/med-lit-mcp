@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from helpers import Case, record
@@ -299,3 +300,110 @@ class WikiTests(Case):
         wiki_export.export_wiki(self.project)
         names = sorted(path.name for path in (self.project.root / "entities").glob("*.md"))
         self.assertEqual(names, ["C (concept).md", "C sharp.md"])
+
+
+TEXT_C = (
+    "A randomized trial compared large language models with standardized patients for history-taking "
+    "practice. The large language models gave immediate feedback.\n\n"
+    "Oncology clinics hosted the sessions."
+)
+
+
+class PageUpdateTests(Case):
+    def setUp(self) -> None:
+        super().setUp()
+        self.run_id = self.make_run([record(1, title="Oncology SDM"), record(2, title="Cardiology aids"), record(3, title="Trial")])
+        self.sha = {uid: self.add_text(self.run_id, uid, text) for uid, text in
+                    (("pubmed:1", TEXT_A), ("pubmed:2", TEXT_B), ("pubmed:3", TEXT_C))}
+
+    def extract(self, uid: str, entities: list[dict]) -> dict:
+        return wiki.record_extraction(self.run_id, uid, self.sha[uid], 0, entities, [])
+
+    def write_first_page(self) -> dict:
+        self.extract("pubmed:1", [entity("large language model", "Large language models", role="intervention")])
+        self.extract("pubmed:2", [entity("large language model", "LLMs drafted", role="intervention")])
+        context = wiki.next_synthesis(self.project, self.run_id)
+        self.assertEqual((context["mode"], len(context["mentions"])), ("new", 2))
+        body = (
+            "## Overview\n\nLLMs supported decisions [pubmed:1] and drafted aids [pubmed:2].\n\n"
+            "## Recurring Themes\n\nClinicians checked the output [pubmed:2].\n"
+        )
+        return wiki.record_synthesis(self.project, context["id"], context["input_digest"], "LLMs.", body, ["support"], [])
+
+    def test_new_evidence_updates_only_the_changed_sections(self) -> None:
+        self.write_first_page()
+        self.extract("pubmed:3", [entity("large language model", "large language models gave immediate feedback", role="intervention")])
+        context = wiki.next_synthesis(self.project, self.run_id)
+        self.assertEqual(context["mode"], "update")
+        self.assertEqual([m["uid"] for m in context["mentions"]], ["pubmed:3"])  # only the new evidence
+        self.assertEqual({s["uid"]: s["new"] for s in context["sources"]}, {"pubmed:1": False, "pubmed:2": False, "pubmed:3": True})
+        self.assertIn("Clinicians checked the output", context["current_synthesis"])
+        self.assertEqual(context["current_sections"], ["Overview", "Recurring Themes"])
+        self.assertIn("Update it; do not rewrite it", context["instructions"])
+        with self.assertRaisesRegex(ValueError, "changed sections"):
+            wiki.record_synthesis(self.project, context["id"], context["input_digest"])
+        saved = wiki.record_synthesis(
+            self.project, context["id"], context["input_digest"],
+            sections={"Recurring Themes": "## Recurring Themes\n\nClinicians checked the output [pubmed:2]; a trial added feedback [pubmed:3]."},
+        )
+        self.assertEqual((saved["mode"], saved["version"]), ("update", 2))
+        with database(self.project.db) as conn:
+            row = conn.execute("SELECT summary, synthesis, stale, sources_json FROM kg_syntheses").fetchone()
+        self.assertEqual(row["summary"], "LLMs.")  # kept
+        self.assertIn("## Overview\n\nLLMs supported decisions [pubmed:1] and drafted aids [pubmed:2].", row["synthesis"])
+        self.assertIn("a trial added feedback [pubmed:3]", row["synthesis"])
+        self.assertEqual(row["synthesis"].count("## Recurring Themes"), 1)
+        self.assertEqual((row["stale"], json.loads(row["sources_json"])), (0, ["pubmed:1", "pubmed:2", "pubmed:3"]))
+        self.assertTrue(wiki.next_synthesis(self.project, self.run_id)["done"])
+
+    def test_setting_only_evidence_does_not_reopen_a_page(self) -> None:
+        self.write_first_page()
+        self.extract("pubmed:3", [entity("large language model", "large language models", role="context")])
+        self.assertTrue(wiki.next_synthesis(self.project, self.run_id)["done"])
+        with database(self.project.db) as conn:
+            self.assertEqual(conn.execute("SELECT stale, version FROM kg_syntheses").fetchone()[:], (0, 1))
+
+    def test_withdrawn_sources_must_leave_the_page(self) -> None:
+        self.write_first_page()
+        with database(self.project.db) as conn:
+            wiki.withdraw_article(conn, "pubmed:2", min_sources=1)
+        context = wiki.next_synthesis(self.project, self.run_id, min_sources=1)
+        self.assertEqual((context["mode"], context["removed_sources"], context["mentions"]), ("update", ["pubmed:2"], []))
+        with self.assertRaisesRegex(ValueError, r"pubmed:2 withdrawn from the review\); fix sections: Overview$"):
+            wiki.record_synthesis(self.project, context["id"], context["input_digest"], sections={"Recurring Themes": ""})
+        saved = wiki.record_synthesis(
+            self.project, context["id"], context["input_digest"],
+            sections={"Overview": "LLMs supported decisions [pubmed:1].", "Recurring Themes": ""},
+        )
+        with database(self.project.db) as conn:
+            text = conn.execute("SELECT synthesis FROM kg_syntheses").fetchone()[0]
+        self.assertEqual((saved["version"], "pubmed:2" in text, "Recurring Themes" in text), (2, False, False))
+
+    def test_new_pages_come_before_updates(self) -> None:
+        self.write_first_page()
+        self.extract("pubmed:3", [entity("large language model", "large language models gave immediate feedback", role="intervention"),
+                                  entity("standardized patient", "standardized patients", "METHOD", role="comparator")])
+        self.extract("pubmed:1", [entity("large language model", "Large language models", role="intervention"),
+                                  entity("standardized patient", "shared decision-making", "METHOD")])
+        context = wiki.next_synthesis(self.project, self.run_id)
+        self.assertEqual((context["name"], context["mode"]), ("standardized patient", "new"))
+
+    def test_existing_pages_are_backfilled_by_the_migration(self) -> None:
+        import sqlite3
+
+        from med_lit_mcp import store
+
+        path = self.root / "old.sqlite3"
+        conn = sqlite3.connect(path)
+        conn.executescript(store.MIGRATIONS[0] + "; PRAGMA user_version=1;")
+        conn.executescript(
+            """INSERT INTO articles VALUES ('pubmed:1','T',NULL,NULL,NULL,'2026',NULL,NULL,NULL,'x','full_text','s1',NULL,NULL,NULL,NULL,NULL,NULL,NULL,'2026');
+               INSERT INTO kg_entities VALUES (1,'LLM','llm','TECHNOLOGY',NULL,NULL,'2026','2026');
+               INSERT INTO kg_extraction_pages VALUES ('pubmed:1','s1',0,1,'{}',NULL,'2026-01-01T00:00:00');
+               INSERT INTO kg_mentions VALUES (1,'pubmed:1',1,0,'LLM','LLM text',NULL,'intervention');
+               INSERT INTO kg_syntheses VALUES (1,'s','## Overview [pubmed:1]','[]','[]','d',1,0,1,NULL,'2026-02-01T00:00:00');"""
+        )
+        conn.close()
+        with database(path) as migrated:
+            self.assertEqual(migrated.execute("SELECT mention_id FROM kg_synthesis_mentions").fetchall()[0][0], 1)
+            self.assertEqual(json.loads(migrated.execute("SELECT sources_json FROM kg_syntheses").fetchone()[0]), ["pubmed:1"])
