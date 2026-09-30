@@ -21,10 +21,10 @@ from .matching import (
 from .ontology import related_types
 from .projects import Project, locate, run_dir
 from .runs import is_eligible, load_manifest
+from .settings import load_settings
 from .store import database, locked_run, now, question_text, save_run, transaction
 
 PAGE_CHARS = 12_000
-DEFAULT_MIN_SOURCES = 2
 MENTION_LIMIT = 30
 MENTION_CHARS = 9_000
 CITATION = re.compile(r"\[([a-z][a-z0-9_-]*:[A-Za-z0-9._/-]+)\]")
@@ -143,10 +143,13 @@ def _reset_if_changed(conn: sqlite3.Connection, row: sqlite3.Row) -> None:
         _mark_stale(conn, touched)
 
 
-def _page_count(conn: sqlite3.Connection, row: sqlite3.Row, max_pages: int | None) -> int:
+def _page_count(
+    conn: sqlite3.Connection, row: sqlite3.Row, max_pages: int | None, *, override: bool = False
+) -> int:
+    """Pages to read: fixed when an article is first opened (from the setting), or by an explicit call."""
     total = len(_pages(row))
     count = row["kg_page_count"]
-    if count is None or max_pages is not None:
+    if count is None or override:
         count = min(total, max_pages) if max_pages else total
         conn.execute("UPDATE articles SET kg_page_count=? WHERE uid=?", (count, row["uid"]))
     return int(count)
@@ -220,18 +223,20 @@ def next_article(run_id: str, max_pages: int | None = None, uid: str | None = No
     if uid is not None and uid not in run_uids:
         raise ValueError(f"{uid} is not a fetched, included article in this run")
     uids = [uid] if uid is not None else run_uids
+    explicit = max_pages is not None
+    max_pages = max_pages if explicit else load_settings(project.root).wiki.max_pages
     with database(project.db) as conn:
-        pending: list[tuple[sqlite3.Row, list[int]]] = []
+        pending: list[tuple[sqlite3.Row, int, list[int]]] = []
         for candidate in uids:
             row = conn.execute("SELECT * FROM articles WHERE uid=?", (candidate,)).fetchone()
             if row is None:
                 continue
             _reset_if_changed(conn, row)
             row = _article(conn, candidate)
-            count = _page_count(conn, row, max_pages if not pending else None)
+            count = _page_count(conn, row, max_pages, override=explicit and not pending)
             todo = sorted(set(range(count)) - _recorded_pages(conn, candidate, row["content_sha256"]))
             if todo:
-                pending.append((row, todo))
+                pending.append((row, count, todo))
                 if len(pending) > 1:
                     break
         if not pending:
@@ -239,9 +244,8 @@ def next_article(run_id: str, max_pages: int | None = None, uid: str | None = No
                 return {"done": True, "run_id": run_id, "uid": uid, "note": "This article is fully extracted"}
             _finish_articles(run_id)
             return {"done": True, "run_id": run_id, "next": "wiki_tasks(run_id) for the next step"}
-        row, todo = pending[0]
+        row, count, todo = pending[0]
         pages = _pages(row)
-        count = int(row["kg_page_count"] or len(pages))
         recorded = _recorded_pages(conn, row["uid"], row["content_sha256"])
         remaining = sum(
             1
@@ -791,8 +795,9 @@ def _synthesis_queue(conn: sqlite3.Connection, uids: list[str] | None, min_sourc
 
 
 def next_synthesis(
-    project: Project, run_id: str | None = None, min_sources: int = DEFAULT_MIN_SOURCES
+    project: Project, run_id: str | None = None, min_sources: int | None = None
 ) -> dict[str, Any]:
+    min_sources = min_sources or load_settings(project.root).wiki.min_sources
     uids = None
     if run_id:
         owner, path = locate(run_id)
@@ -883,7 +888,7 @@ def _finish_articles(run_id: str) -> None:
     """Mark kg_complete articles complete once every eligible entity has a fresh synthesis."""
     project, path = locate(run_id)
     with locked_run(path) as manifest, database(project.db) as conn:
-        min_sources = int(manifest.get("wiki_min_sources") or DEFAULT_MIN_SOURCES)
+        min_sources = int(manifest.get("wiki_min_sources") or load_settings(project.root).wiki.min_sources)
         changed = False
         for uid in _fetched_uids(manifest):
             item = manifest["articles"][uid]
@@ -918,7 +923,8 @@ def work_plan(run_id: str) -> dict[str, Any]:
     uids = _fetched_uids(manifest)
     if not uids:
         raise ValueError("No fetched included articles; run fetch_articles first")
-    min_sources = int(manifest.get("wiki_min_sources") or DEFAULT_MIN_SOURCES)
+    settings = load_settings(project.root).wiki
+    min_sources = int(manifest.get("wiki_min_sources") or settings.min_sources)
     with database(project.db) as conn:
         articles = []
         for uid in uids:
@@ -985,7 +991,8 @@ def work_plan(run_id: str) -> dict[str, Any]:
         "tasks": tasks,
         "how": (
             "Give each task, verbatim, to its own fresh subagent, one after another (not in parallel). "
-            "If you cannot delegate, carry out the tasks yourself in order. Call wiki_tasks again when "
-            "they are finished to get the next step."
+            f"If you cannot delegate, carry out at most {settings.tasks_per_conversation} tasks yourself in "
+            "order, then stop and tell the researcher to continue in a new conversation (the work is saved). "
+            "Call wiki_tasks again when they are finished to get the next step."
         ),
     }

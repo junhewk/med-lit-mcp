@@ -21,6 +21,8 @@ Stages: project → search → screening → fetch → wiki. Start each stage on
 within a stage, repeat its batch tool while remaining > 0, then report and stop.
 
 1. Project: list_projects; create_project(name, path?) for a new topic; open_project(path) for a moved folder.
+   project_settings shows the review's settings (years, records per source, preprints, fetch limit,
+   pages per article); change them only when the researcher asks.
 2. Search: draft the question (guide "question"), validate_question, show the researcher the
    normalized question, sources, date range and warnings, wait for approval, then
    start_search(question_id). If it reports running, resume_search(run_id).
@@ -53,8 +55,12 @@ non-zero records_filtered_by_source. A retrieved and screened set is not a compl
   covers only the last three years; validate_question states the effective start date.
 - Sources: default pubmed, pmc, openalex (plus semantic-scholar when SEMANTIC_SCHOLAR_API_KEY is set).
   europepmc must be searched on its own.
+- Pass project to validate_question: the project's settings fill in the year window, languages,
+  publication types and sources when the question does not set them, and the result lists them.
 - validate_question returns a question_id. After the researcher approves exactly what was shown,
-  pass that id to start_search; to change anything, validate again.""",
+  including the settings, pass that id to start_search; to change anything, validate again.
+- Preprints are dropped at import unless the project's search.preprint_allow is true; the run status
+  counts them as skipped_preprints.""",
     "screening": """\
 # Screening titles and abstracts
 
@@ -73,7 +79,9 @@ non-zero records_filtered_by_source. A retrieved and screened set is not a compl
 fetch_articles tries PMC (NCBI, then Europe PMC); for articles without a PMCID it asks Unpaywall for
 legal open-access copies (a PMC copy first, then an open-access PDF); the abstract is the last resort.
 Repeat while remaining > 0 with the same options. Never describe abstract_only material as full text.
-retry_abstract_only=true and retry_failed=true try those articles again (each once per pass).""",
+retry_abstract_only=true and retry_failed=true try those articles again (each once per pass).
+Articles are fetched in the search's relevance ranking. With a project fetch.limit, articles beyond it
+are marked skipped and listed in skipped_over_limit; report them. fetch.mode abstract_only skips full text.""",
     "wiki": """\
 # Building the wiki
 

@@ -12,7 +12,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from . import keys
+from . import keys, settings
 from .config import projects_dir, user_path
 
 SERVER_NAME = "med-lit"
@@ -100,6 +100,35 @@ def ask_key(provider: keys.Provider, console: Console) -> None:
     print(f"  saved to {keys.config_dir() / keys.KEYS_FILE}")
 
 
+def ask_defaults(console: Console) -> None:
+    """Defaults copied into each new interactive project; each review can still change its own."""
+    current = settings.new_settings("interactive")
+    questions = [
+        ("search.years", "Publication years ('2020-', '2010-2020', 'all'; empty = last three years)",
+         current.search.years or "", lambda v: v or None),
+        ("search.per_source", "Records per source (1-200)", str(current.search.per_source), int),
+        ("search.preprint_allow", "Keep preprints? (y/n)", "y" if current.search.preprint_allow else "n",
+         lambda v: v.lower().startswith("y")),
+        ("fetch.limit", "Most articles to fetch per search (empty = no limit)",
+         str(current.fetch.limit or ""), lambda v: int(v) if v else None),
+        ("wiki.max_pages", "Pages read per article for the wiki (1-50)", str(current.wiki.max_pages or ""),
+         lambda v: int(v) if v else None),
+    ]
+    values: dict = {}
+    for key, prompt, default, convert in questions:
+        while True:
+            try:
+                value = convert(console.text(f"  {prompt}", default))
+                settings.apply_changes(current, {key: value})
+                break
+            except ValueError as exc:
+                print(f"  {exc}")
+        section, name = key.split(".")
+        values.setdefault(section, {})[name] = value
+    path = settings.save_user_defaults("interactive", values)
+    print(f"  saved to {path}; each review keeps its own copy in med-lit.settings.json")
+
+
 def setup(args: argparse.Namespace, console: Console) -> int:
     keys.load_into_environ()
     print("med-lit-mcp setup. Settings go to", keys.config_dir())
@@ -118,6 +147,9 @@ def setup(args: argparse.Namespace, console: Console) -> int:
             state = f" (currently from the {stored[provider.name]})" if stored[provider.name] else ""
             if console.confirm(f"Add a {provider.title} key{state}?", default=False):
                 ask_key(provider, console)
+
+    if not console.assume_yes and console.confirm("\nSet your default settings for new reviews now?", default=False):
+        ask_defaults(console)
 
     if args.no_register:
         print("\nSaved. Skipped client registration (--no-register).")

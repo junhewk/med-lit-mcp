@@ -23,6 +23,7 @@ from .medsearch.cli import _years_ago
 from .medsearch.models import Question, ValidationError
 from .projects import Project, new_run_dir, run_dir
 from .runs import summary
+from .settings import SearchSettings, is_preprint, load_settings, year_filters
 from .store import (
     MANIFEST_VERSION,
     RUN_ID,
@@ -113,10 +114,19 @@ def default_sources() -> list[str]:
     return ["pubmed", "pmc", "openalex", *(["semantic-scholar"] if semantic_scholar_key() else [])]
 
 
-def validate_question(question: dict[str, Any], sources: list[str] | None = None) -> dict[str, Any]:
-
+def validate_question(
+    question: dict[str, Any], sources: list[str] | None = None, project: Project | None = None
+) -> dict[str, Any]:
+    """Validate a question; with a project, fill in its settings (years, filters, sources)."""
+    config = load_settings(project.root).search if project else SearchSettings()
     normalized = normalize_question(question)
-    chosen = normalize_sources(sources)
+    filters = normalized["filters"]
+    if not filters.get("from_date") and not filters.get("to_date"):
+        filters.update(year_filters(config.years))
+    for key in ("languages", "publication_types"):
+        if not filters.get(key) and getattr(config, key):
+            filters[key] = list(getattr(config, key))
+    chosen = normalize_sources(sources) or normalize_sources(config.sources)
     try:
         Question.from_dict(normalized)
     except ValidationError as exc:
@@ -138,14 +148,24 @@ def validate_question(question: dict[str, Any], sources: list[str] | None = None
     elif not chosen and not semantic_scholar_key():
         warnings.append("semantic-scholar is skipped by default until SEMANTIC_SCHOLAR_API_KEY is set")
     question_id = uuid.uuid4().hex
+    applied = {
+        "years": config.years or "last three years (default)",
+        "per_source": config.per_source,
+        "preprint_allow": config.preprint_allow,
+    }
     atomic_json(
         _draft_path(question_id),
-        {"question": normalized, "sources": effective, "warnings": warnings, "created_at": now()},
+        {
+            "question": normalized, "sources": effective, "warnings": warnings, "created_at": now(),
+            "project": project.name if project else None, "per_source": config.per_source,
+            "preprint_allow": config.preprint_allow,
+        },
     )
     return {
         "question_id": question_id,
         "normalized_question": normalized,
         "sources": effective,
+        "settings": applied,
         "europepmc_query": europepmc_query(normalized),
         "warnings": warnings,
         "next": "Show this to the researcher; after approval call start_search(question_id).",
@@ -201,21 +221,42 @@ def import_results(path: Path, manifest: dict[str, Any]) -> None:
         manifest["records_by_source"] = report.get("records_by_source", {})
         manifest["records_filtered_by_source"] = report.get("records_filtered_by_source", {})
     articles = manifest.setdefault("articles", {})
+    ranks = _ranks(output / "ranked-results.jsonl")
+    skipped = manifest.setdefault("skipped_preprints", [])
     added = 0
     with results.open(encoding="utf-8") as handle:
         for line in handle:
             if line.strip():
                 record = json.loads(line)
                 uid = record_uid(record)
-                if uid not in articles:
-                    articles[uid] = {"record": record, "fetch": "pending", "wiki": "pending"}
-                    added += 1
+                if uid in articles or uid in skipped:
+                    continue
+                if not manifest.get("preprint_allow", False) and is_preprint(record):
+                    skipped.append(uid)
+                    continue
+                articles[uid] = {"record": record, "fetch": "pending", "wiki": "pending", "rank": ranks.get(uid)}
+                added += 1
     if retried:
         manifest["last_retry"] = {"sources": retried, "new_articles": added, "finished_at": now()}
     manifest["search_status"] = "complete"
     for key in ("search_error", "search_pid", "search_output", "retry_sources"):
         manifest.pop(key, None)
     save_run(path, manifest)
+
+
+def _ranks(path: Path) -> dict[str, int]:
+    """Position of each record in the engine's relevance ranking (1 = first)."""
+    if not path.is_file():
+        return {}
+    ranks: dict[str, int] = {}
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                try:
+                    ranks.setdefault(record_uid(json.loads(line)), len(ranks) + 1)
+                except ValueError:
+                    continue
+    return ranks
 
 
 def europepmc_query(question: dict[str, Any]) -> str:
@@ -418,11 +459,13 @@ def start_search(
     question: dict[str, Any],
     sources: list[str] | None = None,
     *,
-    limit_per_source: int = 20,
+    limit_per_source: int | None = None,
     wait_seconds: float = 45,
 ) -> dict[str, Any]:
-    checked = validate_question(question, sources)
+    config = load_settings(project.root).search
+    checked = validate_question(question, sources, project)
     normalized, chosen = checked["normalized_question"], checked["sources"]
+    limit_per_source = limit_per_source or config.per_source
     if not 1 <= limit_per_source <= 200:
         raise ValueError("limit_per_source must be between 1 and 200")
     run_id, path = new_run_dir(project)
@@ -434,6 +477,7 @@ def start_search(
         "search_status": "running",
         "sources": chosen,
         "limit_per_source": limit_per_source,
+        "preprint_allow": config.preprint_allow,
         "articles": {},
     }
     save_run(path, manifest)

@@ -23,6 +23,7 @@ from typing import Any
 
 from .config import projects_dir, state_dir, user_path
 from .ontology import ONTOLOGY_VERSION
+from .settings import new_settings, write_settings
 from .store import RUN_FILE, RUN_ID, atomic_json, file_lock, now, read_json
 
 WORK = ".med-lit"
@@ -83,7 +84,7 @@ def _folder_name(name: str) -> str:
     return cleaned[:80]
 
 
-def create_project(name: str, path: str | None = None) -> Project:
+def create_project(name: str, path: str | None = None, *, mode: str = "interactive") -> Project:
     name = " ".join(name.split())
     if not name:
         raise ValueError("Give the project a name, e.g. the review topic")
@@ -106,6 +107,7 @@ def create_project(name: str, path: str | None = None) -> Project:
                 "ontology": f"med-lit/{ONTOLOGY_VERSION}",
             },
         )
+        write_settings(root, new_settings(mode))
         entries[name] = {"id": project.id, "path": str(root)}
     return project
 
