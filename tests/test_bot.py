@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import unittest
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -69,11 +69,6 @@ class BotCase(Case):
             entries.append({"uid": uid, "decision": decision, "reason": "per criteria", "evidence": title if decision != "uncertain" else ""})
         screening.record_decisions(self.run_id, manifest["selection_revision"], entries)
 
-    def expire(self) -> None:
-        state_path = self.bot.work / bot.BOT_FILE
-        state = read_json(state_path)
-        state["active"]["deadline"] = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
-        atomic_json(state_path, state)
 
 
 class BotRunTests(BotCase):
@@ -111,8 +106,6 @@ class BotRunTests(BotCase):
         step = bot.bot_next("Watch")
         self.assertEqual((step["step"], step["stage"]), ("wiki", "extract"))
         self.assertIn("pubmed:5", step["tasks"][0])
-        self.expire()
-        self.assertEqual(bot.bot_next("Watch")["step"], "finish")
 
         finished = bot.bot_finish("Watch")
         report = Path(finished["report"])
@@ -121,7 +114,6 @@ class BotRunTests(BotCase):
         self.assertIn("New articles: 3; 2 more were over the cap of 3", text)
         self.assertIn("included 1, excluded 1, uncertain 1", text)
         self.assertIn("Waiting for your decision (1)", text)
-        self.assertIn("The time budget ran out", text)
         self.assertIn("1 to extract", text)
         self.assertTrue(finished["message"].startswith(f"# Watch: update {date.today().isoformat()}"))  # noqa: DTZ011
         state = bot.read_state(self.bot)
@@ -176,6 +168,16 @@ class BotRunTests(BotCase):
         self.assertEqual(self.argv[self.argv.index("--sources") + 1], "pubmed")
         bot.bot_finish("Watch")
         self.assertIsNone(bot.read_state(self.bot)["backfill"])
+
+    def test_a_run_whose_process_ended_releases_the_project(self) -> None:
+        self.start()
+        self.assertTrue(self.start()["busy"])  # this process is alive and has just written
+        state_path = self.bot.work / bot.BOT_FILE
+        state = read_json(state_path)
+        state["active"]["pid"] = 2**22 + 12345  # no such process
+        atomic_json(state_path, state)
+        self.assertNotIn("busy", self.start())
+        self.assertIn("abandoned", bot.read_state(self.bot)["history"][-1]["outcome"])
 
     def test_paused_bots_do_not_run(self) -> None:
         bot.set_status(self.bot, "paused")

@@ -135,7 +135,6 @@ BOT_QUESTIONS = (
     ("bot.lookback_days", "Look back how many days of publications each run", int),
     ("bot.max_new_articles", "Most new articles taken in per run (the rest wait for a later run)", int),
     ("bot.max_syntheses", "Most entity pages written per run", int),
-    ("bot.time_budget_minutes", "Time budget per run, in minutes", int),
     ("search.per_source", "Records requested from each source per run (1-200)", int),
 )
 
@@ -258,7 +257,7 @@ def edit(args: argparse.Namespace, console: Console) -> int:
     while True:
         state = bot.read_state(project)
         print(f"\n{project.name}: {state['status']}, {schedule_text(state['schedule'])}")
-        print("  1. schedule   2. caps, look-back and time budget   3. screening criteria")
+        print("  1. schedule   2. caps and look-back   3. screening criteria")
         print("  4. search question   5. pause or resume   6. archive   7. done")
         choice = console.text("Change", "7")
         if choice == "1":

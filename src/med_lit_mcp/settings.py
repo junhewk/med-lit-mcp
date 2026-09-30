@@ -71,7 +71,6 @@ class BotSettings(Section):
     lookback_days: int = Field(default=90, ge=1, le=3650, description="Publication-date look-back of each run (open-ended to the future)")
     max_new_articles: int = Field(default=20, ge=1, le=1000, description="New articles screened per run; the rest are dropped and reported")
     max_syntheses: int = Field(default=15, ge=0, le=1000, description="Entity pages written per run")
-    time_budget_minutes: int = Field(default=50, ge=5, le=1440, description="No new work starts after this")
 
 
 class ProjectSettings(Section):
