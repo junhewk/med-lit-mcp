@@ -179,6 +179,17 @@ class BotRunTests(BotCase):
         self.assertNotIn("busy", self.start())
         self.assertIn("abandoned", bot.read_state(self.bot)["history"][-1]["outcome"])
 
+    def test_the_server_holds_a_run_to_its_page_cap(self) -> None:
+        settings.write_settings(
+            self.bot.root, settings.apply_changes(settings.load_settings(self.bot.root), {"bot.max_syntheses": 0})
+        )
+        self.assertIsNone(bot.synthesis_allowance(self.bot))  # no run in progress
+        self.start()
+        self.assertEqual(bot.synthesis_allowance(self.bot), 0)
+        self.assertTrue(wiki.next_synthesis(self.bot)["done"])
+        with self.assertRaisesRegex(ValueError, "max_syntheses"):
+            wiki.record_synthesis(self.bot, 1, "digest", "s", "x" * 300, ["a"], [])
+
     def test_paused_bots_do_not_run(self) -> None:
         bot.set_status(self.bot, "paused")
         with self.assertRaisesRegex(ValueError, "paused"):

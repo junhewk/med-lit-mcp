@@ -59,6 +59,10 @@ class Case(unittest.TestCase):
         # No network in tests: Unpaywall knows no open-access copy unless a test says otherwise.
         unpaywall = patch("med_lit_mcp.fetch.unpaywall_locations", return_value=[])
         unpaywall.start()
+        # Nor do title lookups for records without a DOI, PMID or PMCID find anything.
+        lookup = patch("med_lit_mcp.search.find_identifiers", return_value=(None, "no DOI or PMID found in PubMed or Crossref"))
+        lookup.start()
+        self.addCleanup(lookup.stop)
         self.addCleanup(unpaywall.stop)
 
     def make_run(

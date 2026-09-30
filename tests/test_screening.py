@@ -75,3 +75,15 @@ class ScreeningTests(Case):
         self.assertEqual((item["screening"]["method"], len(item["screening_history"])), ("manual", 1))
         with self.assertRaisesRegex(ValueError, "reason"):
             screening.review(self.run_id, "pubmed:124", "include", " ")
+
+    def test_an_uncertain_decision_needs_a_specific_reason(self) -> None:
+        screening.set_criteria(self.run_id, ["communication training"], ["veterinary"])
+        vague = screening.record_decisions(
+            self.run_id, 1, [self.decide("pubmed:125", "uncertain", reason="Ambiguous case for researcher review")]
+        )
+        self.assertIn("name the criterion", vague["downgraded"][0]["error"])
+        specific = screening.record_decisions(
+            self.run_id, 1,
+            [self.decide("pubmed:125", "uncertain", reason="Abstract does not say whether the veterinary trainees are students")],
+        )
+        self.assertEqual((specific["recorded"], specific["downgraded"]), (1, []))

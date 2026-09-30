@@ -17,8 +17,8 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
-from .config import ncbi_email, state_dir
-from .fetch import safe_http
+from .config import ncbi_api_key, ncbi_email, state_dir
+from .fetch import _ncbi_pause, safe_http
 from .medsearch.cli import _years_ago
 from .medsearch.models import Question, ValidationError
 from .medsearch.preprints import is_preprint
@@ -215,6 +215,87 @@ def record_uid(record: dict[str, Any]) -> str:
     return f"{source}:{source_id}"
 
 
+TITLE_MATCH_MIN = 40  # a title shorter than this must match exactly, not as a prefix
+
+
+def _title_key(title: Any) -> str:
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", html.unescape(str(title or "")).casefold()).split())
+
+
+def titles_match(first: Any, second: Any) -> bool:
+    """Same title, or one is the other plus a subtitle (for example ': A Meta-Analysis')."""
+    a, b = _title_key(first), _title_key(second)
+    if not a or not b:
+        return False
+    short, long = sorted((a, b), key=len)
+    return short == long or (len(short) >= TITLE_MATCH_MIN and long.startswith(short + " "))
+
+
+def _years_close(first: Any, second: Any) -> bool:
+    a, b = str(first or "")[:4], str(second or "")[:4]
+    return not (a.isdigit() and b.isdigit()) or abs(int(a) - int(b)) <= 1
+
+
+def _pubmed_by_title(title: str, year: Any) -> dict[str, str] | None:
+    email = ncbi_email()
+    if not email:
+        return None
+    base = {"db": "pubmed", "retmode": "json", "tool": "med-lit-mcp", "email": email}
+    if ncbi_api_key():
+        base["api_key"] = ncbi_api_key()
+    phrase = " ".join(re.sub(r'["\[\]]', " ", title).split())
+    _ncbi_pause()
+    found = json.loads(safe_http(
+        "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?"
+        + urllib.parse.urlencode(base | {"term": f'"{phrase}"[Title]', "retmax": 3}), timeout=20,
+    ))
+    ids = (found.get("esearchresult") or {}).get("idlist") or []
+    if not ids:
+        return None
+    _ncbi_pause()
+    summaries = json.loads(safe_http(
+        "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?"
+        + urllib.parse.urlencode(base | {"id": ",".join(ids)}), timeout=20,
+    )).get("result") or {}
+    for pmid in ids:
+        item = summaries.get(pmid) or {}
+        if titles_match(item.get("title"), title) and _years_close(item.get("pubdate"), year):
+            other = {entry.get("idtype"): entry.get("value") for entry in item.get("articleids") or []}
+            return {"pmid": pmid, "doi": (other.get("doi") or "").lower() or None, "pmcid": other.get("pmc")}
+    return None
+
+
+def _crossref_by_title(title: str, year: Any) -> dict[str, str] | None:
+    params = {"query.bibliographic": title, "rows": 5, "select": "DOI,title,issued"}
+    if ncbi_email():
+        params["mailto"] = ncbi_email()
+    items = (json.loads(safe_http("https://api.crossref.org/works?" + urllib.parse.urlencode(params), timeout=20))
+             .get("message") or {}).get("items") or []
+    for item in items:
+        issued = ((item.get("issued") or {}).get("date-parts") or [[None]])[0][0]
+        if titles_match((item.get("title") or [""])[0], title) and _years_close(issued, year):
+            return {"doi": str(item["DOI"]).lower()}
+    return None
+
+
+def find_identifiers(record: dict[str, Any]) -> tuple[dict[str, str] | None, str]:
+    """A DOI or PMID for a record that came without one: PubMed by title, then Crossref.
+
+    Only a strict title match (same title, or the same plus a subtitle) within a year counts."""
+    title = str(record.get("title") or "").strip()
+    if len(_title_key(title)) < 20:
+        return None, "title too short to look up"
+    year = record.get("year") or str(record.get("publication_date") or "")[:4]
+    try:
+        for lookup, method in ((_pubmed_by_title, "PubMed title match"), (_crossref_by_title, "Crossref title match")):
+            found = lookup(title, year)
+            if found:
+                return {k: v for k, v in found.items() if v}, method
+    except (OSError, ValueError, urllib.error.URLError, json.JSONDecodeError) as exc:
+        return None, f"lookup failed: {str(exc)[:120]}"
+    return None, "no DOI or PMID found in PubMed or Crossref"
+
+
 def _record_keys(uid: str, record: dict[str, Any]) -> list[str]:
     """Identifiers that mark two records, possibly from different sources, as one article."""
     keys = [f"uid:{uid}"]
@@ -273,6 +354,9 @@ def import_results(path: Path, manifest: dict[str, Any]) -> None:
     # Articles found by an earlier search of this project keep that search's decisions.
     known = known_articles(path.parent)
     already = manifest.setdefault("already_known", {})
+    no_identifier = manifest.setdefault("skipped_no_identifier", [])
+    unidentified = {entry["uid"] for entry in no_identifier}
+    new_unidentified: list[str] = []
     added = 0
     fresh: list[tuple[str, dict[str, Any]]] = []
     with results.open(encoding="utf-8") as handle:
@@ -285,6 +369,21 @@ def import_results(path: Path, manifest: dict[str, Any]) -> None:
                 if not manifest.get("preprint_allow", False) and is_preprint(record):
                     skipped.append(uid)
                     continue
+                if not (record.get("doi") or record.get("pmid") or record.get("pmcid")):
+                    # Every article needs a DOI, PMID or PMCID: it is how one article is recognised
+                    # across sources and searches, and how full text is found.
+                    # Looked up again whenever a search finds it, in case a DOI was registered since.
+                    found, how = find_identifiers(record)
+                    if not found:
+                        if uid not in unidentified:
+                            no_identifier.append({"uid": uid, "title": str(record.get("title") or "")[:200], "reason": how})
+                            unidentified.add(uid)
+                            new_unidentified.append(uid)
+                        continue
+                    record.update({k: v for k, v in found.items() if not record.get(k)}, identifier_lookup=how)
+                    uid = record_uid(record)
+                    if uid in articles or uid in already:
+                        continue
                 match = next((known[key] for key in _record_keys(uid, record) if key in known), None)
                 if match and match[0] == manifest["run_id"]:
                     continue  # the same article from another source in this run
@@ -312,6 +411,7 @@ def import_results(path: Path, manifest: dict[str, Any]) -> None:
                 "finished_at": now(),
                 "new_articles": added,
                 "dropped_over_cap": dropped,
+                "no_identifier": new_unidentified,
                 "source_failures": report.get("source_failures", {}),
                 "records_by_source": report.get("records_by_source", {}),
                 "truncated_sources": sorted(k for k, v in engine.items() if isinstance(v, dict) and v.get("truncated")),
@@ -507,6 +607,7 @@ def _status(path: Path, manifest: dict[str, Any]) -> dict[str, Any]:
         key: result[key]
         for key in (
             "run_id", "search_status", "search_error", "candidates", "already_known", "skipped_preprints",
+            "skipped_no_identifier",
             "source_failures", "records_by_source", "records_filtered_by_source",
         )
     } | {"run_dir": str(path)}

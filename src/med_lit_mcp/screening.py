@@ -16,8 +16,10 @@ INSTRUCTIONS = (
     "Screen each item using only its title and abstract against the criteria. A clear inclusion "
     "match is include; a clear exclusion match is exclude; missing or ambiguous information is "
     "uncertain. Never infer unavailable facts. For include/exclude, evidence must be an exact "
-    "short quote from the title or abstract. Submit all items with record_screening_decisions "
-    "using this revision."
+    "short quote from the title or abstract. For uncertain, the reason must name the criterion "
+    "that cannot be judged and what the title/abstract leaves open (e.g. 'does not say whether the "
+    "virtual patient uses a large language model'), never just 'ambiguous'. Submit all items with "
+    "record_screening_decisions using this revision."
 )
 
 
@@ -31,6 +33,17 @@ def normalize_criteria(include: list[str], exclude: list[str]) -> dict[str, list
     return criteria
 
 
+# Words that say a decision is hard without saying why.
+GENERIC_REASON_WORDS = frozenset(
+    ["a", "an", "and", "are", "as", "be", "borderline", "by", "case", "check", "could", "decide", "decision", "for", "further", "human", "in", "insufficient", "is", "it", "manual", "may", "might", "more", "need", "needed", "needs", "not", "of", "or", "possibly", "record", "relevant", "requires", "required", "researcher", "review", "reviewer", "should", "sure", "the", "this", "to", "unclear", "uncertain", "ambiguous", "ambiguity", "whether", "article", "study", "paper", "information", "clear"]
+)
+
+
+def _specific(reason: str) -> bool:
+    words = [w for w in "".join(c if c.isalnum() else " " for c in reason.casefold()).split() if len(w) > 2]
+    return len([w for w in words if w not in GENERIC_REASON_WORDS]) >= 3
+
+
 def validate_decision(
     decision: str, reason: str, evidence: str, title: str, abstract: str
 ) -> str | None:
@@ -39,6 +52,11 @@ def validate_decision(
         return "decision must be include, exclude, or uncertain"
     if not reason.strip():
         return "reason is empty"
+    if decision == "uncertain" and not _specific(reason):
+        return (
+            "the reason must name the criterion that cannot be judged and what the title/abstract "
+            "leaves open, not just that the case is ambiguous"
+        )
     if decision != "uncertain":
         if not evidence.strip():
             return "include/exclude needs an evidence quote"
@@ -198,8 +216,8 @@ def record_decisions(
             "remaining": result["selection"]["pending"],
             "selection": result["selection"],
             "note": (
-                "Downgraded items are stored as uncertain; resubmit once with a verbatim quote, or "
-                "leave them for the researcher."
+                "Downgraded items are stored as uncertain; resubmit each once, fixing its error (a "
+                "verbatim quote, or a specific reason), or leave them for the researcher."
                 if downgraded
                 else None
             ),

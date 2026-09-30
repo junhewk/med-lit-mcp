@@ -412,22 +412,28 @@ async def next_synthesis(
 async def record_synthesis(
     entity_id: int,
     input_digest: str,
-    summary: Annotated[str, Field(min_length=1, max_length=800, description="2-3 sentence overview")],
-    synthesis: Annotated[str, Field(min_length=200, max_length=20000, description="Markdown article citing sources as [uid] and linking entities as [[Name]]")],
-    key_aspects: Annotated[list[str], Field(min_length=1, max_length=10)],
-    related_entities: Annotated[list[RelatedEntity], Field(max_length=30)],
     ctx: Context,
+    summary: Annotated[str | None, Field(min_length=1, max_length=800, description="2-3 sentence overview; for an update only if it changes")] = None,
+    synthesis: Annotated[str | None, Field(min_length=200, max_length=20000, description="New page: Markdown with '## ' sections, citing sources as [uid] and linking entities as [[Name]]")] = None,
+    sections: Annotated[
+        dict[str, str] | None,
+        Field(description="Update: only the changed sections, as {heading: full new section text}; an empty text removes a section"),
+    ] = None,
+    key_aspects: Annotated[list[str] | None, Field(min_length=1, max_length=10)] = None,
+    related_entities: Annotated[list[RelatedEntity] | None, Field(max_length=30)] = None,
     project: ProjectName = None,
 ) -> dict[str, Any]:
-    """Save an entity page written only from next_synthesis evidence. Rules: guide("synthesis")."""
+    """Save a new entity page, or an update of a written one, from next_synthesis evidence.
+    Rules: guide("synthesis")."""
     return await _run(
         lambda **kwargs: wiki.record_synthesis(projects.get_project(project), **kwargs),
         entity_id=entity_id,
         input_digest=input_digest,
         summary=summary,
         synthesis=synthesis,
+        sections=sections,
         key_aspects=key_aspects,
-        related_entities=[entity.model_dump() for entity in related_entities],
+        related_entities=None if related_entities is None else [entity.model_dump() for entity in related_entities],
         client=_client(ctx),
     )
 
