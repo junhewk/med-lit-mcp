@@ -6,6 +6,8 @@ Your MCP client's model does the reading and writing (screening decisions, entit
 
 It works with Hermes, Claude Code and Claude Desktop on Linux and macOS. It needs no embedding endpoint, no model API key and no build step. The only required setting is `NCBI_EMAIL`.
 
+With Hermes, a review can also be kept up to date by a **bot**: a scheduled job that re-runs a search you have tried, screens what is new and adds it to the wiki. See [Bots](#bots-keep-a-review-up-to-date-hermes).
+
 ## Install
 
 med-lit-mcp is on [PyPI](https://pypi.org/project/med-lit-mcp/) and runs through [`uv`](https://docs.astral.sh/uv/) ([install uv](https://docs.astral.sh/uv/getting-started/installation/) first if you don't have it). Claude Desktop users can skip the terminal entirely with the extension below.
@@ -35,7 +37,7 @@ To try the latest unreleased code, replace `med-lit-mcp` with `--from git+https:
 
 1. Download `med-lit-<version>.mcpb` from the [latest release](https://github.com/junhewk/med-lit-mcp/releases/latest).
 2. In Claude Desktop open **Settings → Extensions → Advanced settings → Install Extension…** and choose the file.
-3. Fill in the form: your email address (needed for PubMed and Unpaywall), optionally a folder for your reviews (default `~/med-lit`) and any API keys. Keys are stored in the macOS Keychain or Windows Credential Manager.
+3. Fill in the form: your email address (needed for PubMed and Unpaywall), optionally a folder for your reviews (default `~/med-lit`) and any API keys. Claude Desktop stores the keys encrypted.
 4. **Switch the extension on.** Its switch shows "Disabled" until you turn it on.
 5. In a chat, ask Claude to start a new review.
 
@@ -70,7 +72,7 @@ Instead of the extension, you can add the server to `claude_desktop_config.json`
 
 ### Updating
 
-`uvx` caches the installed version. To pick up a new release, run `uvx med-lit-mcp@latest --check` once, then restart the client.
+`uvx` caches the installed version. To pick up a new release, run `uvx med-lit-mcp@latest --check` once, then restart the client (in Hermes, `/reload-mcp`). Bots use the same cached version from their next run.
 
 ## Settings
 
@@ -86,6 +88,7 @@ Instead of the extension, you can add the server to `claude_desktop_config.json`
 | `OPENALEX_API_KEY` | Optional but recommended free [OpenAlex key](https://openalex.org/settings/api). OpenAlex meters keyless use and throttles keyless searches when it is busy. |
 | `SCOPUS_API_KEY`, `SCOPUS_INSTTOKEN` | Adds Scopus to the default sources. Elsevier keys usually work only from an institution's network; the institutional token lifts that. `keys test scopus` tells you which applies. |
 | `MED_LIT_PROJECTS_DIR` | Where new projects are created when no path is given. Default: `~/med-lit`. |
+| `MED_LIT_CONFIG_DIR` | Where `setup` keeps `config.json`, `keys.json` and `defaults.json`. Default: `$XDG_CONFIG_HOME/med-lit-mcp` or `~/.config/med-lit-mcp`. |
 | `MED_LIT_STATE_DIR` | Where the list of known projects is kept. Default: `$XDG_DATA_HOME/med-lit-mcp` or `~/.local/share/med-lit-mcp`. |
 | `MED_LIT_SCOPE` | Set to `bot` by `setup bot` for the `medlitbot` Hermes profile: that server sees only bot projects and cannot create projects or decide uncertain articles. |
 | `MED_LIT_STAGES` | Optional, for advanced users. Exposes only the tools up to a stage: `search`, `screening`, `fetch` or `wiki` (default: all). For example, `fetch` hides the 11 wiki tools and the 3 bot tools. Clients that load tools on demand rarely need this; it helps with clients that load every tool up front. Project, status and guide tools are always available. |
@@ -107,10 +110,13 @@ Each review keeps its own settings in `med-lit.settings.json`, a visible file at
 | `wiki.min_sources` | 2 | Source articles an entity needs before it gets a synthesis page; others stay as stubs. |
 | `wiki.tasks_per_conversation` | 5 | For clients without subagents (Claude Desktop): wiki tasks done in one conversation before the agent asks you to continue in a new one. |
 
-A new project starts from a copy of your defaults, so changing the defaults later never alters existing reviews. Set the defaults during `setup`, or edit `~/.config/med-lit-mcp/defaults.json`, which holds one set per project mode:
+A new project starts from a copy of your defaults, so changing the defaults later never alters existing reviews. Set the defaults during `setup`, or edit `~/.config/med-lit-mcp/defaults.json`, which holds one set for normal reviews and one for [bots](#bots-keep-a-review-up-to-date-hermes):
 
 ```json
-{"interactive": {"search": {"years": "2015-", "per_source": 40}, "fetch": {"limit": 30}}}
+{
+  "interactive": {"search": {"years": "2015-", "per_source": 40}, "fetch": {"limit": 30}},
+  "bot": {"bot": {"max_new_articles": 5}}
+}
 ```
 
 Settings apply in this order, later ones winning: built-in defaults, your defaults, the project's file, and a value given for a single call (for example `limit_per_source` in `start_search`).
@@ -126,9 +132,11 @@ Each review is a **project**: one self-contained folder holding the review's wik
 ├── med-lit.settings.json                      ← this review's settings
 ├── entities/Shared decision making.md
 ├── sources/Guirgus 2026 - Assessing Artificial Intelligence in Patient Education.md
+├── updates/2026-09-30.md                      ← bot projects only: one report per run
 └── .med-lit/                                  ← hidden working data
     ├── project.json                           ← name, id, format version
     ├── med-lit.sqlite3                        ← this review's articles and knowledge graph
+    ├── bot.json                               ← bot projects only: schedule, versions, run history
     └── runs/<run-id>/                         ← searches, screening decisions, fetched text
 ```
 
@@ -164,6 +172,7 @@ Claude Code also exposes the guided prompts `/mcp__med-lit__plan_search`, `scree
 
 How the stages work:
 - **Question structure.** Groups within a component are ANDed, and a group's synonyms are ORed. Give each separately required facet (for example technology and task) its own group; put only true synonyms in a group; leave out ambiguous bare acronyms such as `LLM` unless you approve them. PCC context is for the setting only. Groups can suggest candidate MeSH headings, which are checked against NCBI before use.
+- **Sources.** Unless you name sources, a search uses the defaults: PubMed, PMC and OpenAlex, plus Semantic Scholar and Scopus when their keys are set. Europe PMC is searched on its own, when you ask for it.
 - **Date range.** Without a `from_date` filter or a `search.years` setting, a search covers only the last three years. `validate_question` states the effective start date, so ask for an earlier one if you need it. Dates are applied to the day in every source except Scopus, which searches whole years; its results are then trimmed to the exact dates by cover date.
 - **Repeat searches.** A later search in the same project imports only articles new to the project, matched by DOI, PMID, PMCID or record id across sources. Articles an earlier search already found are counted as `already_known` and keep that search's screening decisions and wiki work.
 - **Scopus** returns abstracts and full author lists when your institution subscribes (the COMPLETE view); otherwise it falls back to titles and first authors only.
@@ -183,24 +192,30 @@ If some sources fail while others succeed (for example PMC answering HTTP 500 wh
 
 ## Bots: keep a review up to date (Hermes)
 
-A **bot project** re-runs a search you have already tried, on a schedule, and adds what is new: it screens new articles, fetches the included ones, extracts them into the wiki and rewrites the entity pages their evidence changes. Bots run as Hermes scheduled jobs.
+A **bot project** re-runs a search you have already tried, on a schedule, and adds what is new: it screens new articles, fetches the included ones, extracts them into the wiki and rewrites the entity pages their evidence changes. Bots run as Hermes scheduled jobs; Claude Code and Claude Desktop have no scheduler for them.
+
+**Before you start,** run a normal review in Hermes at least up to screening criteria (search, then "Screen it. Include … Exclude …"). A bot copies that search's question and criteria, so you begin from something you have seen work. Then:
 
 ```bash
 uvx med-lit-mcp setup bot
 ```
 
-Setup asks which search to keep running (it copies that search's question and screening criteria from a normal review), a name, how often and when to run, and the per-run limits. It then:
+Setup lists the searches that have screening criteria and asks which one to keep running, a name, daily or weekly and at what time, and the per-run limits. It then:
 - creates the bot project, which starts empty and holds only what the bot finds from now on;
-- creates the Hermes profile `medlitbot` once, shared by all bots. It is a copy of your current Hermes settings, but its scheduled runs get only the med-lit tools and subagents, and its med-lit server sees only bot projects;
+- creates the Hermes profile `medlitbot` once, shared by all bots. It starts as a copy of your current Hermes profile (model included), but its scheduled runs get only the med-lit tools and subagents, and its med-lit server sees only bot projects;
 - adds one scheduled job per bot. Several bots are fine; setup suggests start times 30 minutes apart so they do not share your model at once.
 
-**Each run:**
-- searches articles published in the look-back window (90 days by default; open-ended, since journals date issues ahead) and takes in only articles new to the project, at most `max_new_articles`, best-ranked first. The rest are listed in the report and can be picked up by a later run;
-- screens them against the frozen criteria, then fetches and extracts the included ones and writes or rewrites at most `max_syntheses` entity pages;
-- finishes all the work its caps allow; how long that takes depends on your model (about 3 minutes per full-text page with a local model). Two runs of the same bot never overlap, and work left by an interrupted run carries over;
-- writes a report to `updates/<date>.md` in the project folder and replies with it. A run that found nothing stays silent.
+To run a bot now instead of waiting for its time, answer yes to setup's last question, or run `hermes -p medlitbot cron run <job id>` (the job id is printed by setup and listed by `hermes -p medlitbot cron list`). Either way the run happens in that terminal and takes as long as a scheduled run, so keep the terminal open until it prints its result.
 
-**Uncertain articles wait for you.** The bot never decides them. Open the bot project in a normal chat ("show the uncertain articles in SDM watch") and decide them with `review_article`; the next run fetches and adds the ones you include.
+**Each run:**
+- searches articles published in the look-back window (90 days by default, open-ended because journals date issues ahead) and takes in only articles new to the project: at most `max_new_articles`, best-ranked first. Articles over the cap are not marked as seen, so later runs pick them up while they are still in the window;
+- screens them against the frozen criteria, fetches and extracts the included ones, and writes or rewrites at most `max_syntheses` entity pages (those with at least `wiki.min_sources` source articles);
+- finishes all the work its caps allow, however long it takes. Two runs of the same bot never overlap; if a run is interrupted, the next one continues its unfinished work;
+- writes a report to `updates/<date>.md` in the project folder and replies with the same text, which Hermes saves under `~/.hermes/profiles/medlitbot/cron/output/<job id>/`. A run that found nothing stays silent and writes no report.
+
+**Choosing `max_new_articles`.** A run's length follows from its cap, not from the window. With a local model, a test bot took about 45 minutes for 5 new articles (3 included, 9 pages extracted, 9 entity pages written) and about 1 hour 50 minutes for 20 (15 included, 35 pages). A new bot's first window usually holds a backlog: 129 matching articles in the test's 90 days. The cap works through it a run at a time, best-ranked first, and the report lists how many are waiting. A small cap keeps each run short; the few lowest-ranked articles may leave the 90-day window before a run reaches them.
+
+**Uncertain articles wait for you.** The bot never decides them; the report lists them with the bot's reasons. Open the bot project in a normal chat ("show the uncertain articles in SDM watch") and decide them with `review_article`; the next run fetches and adds the ones you include.
 
 **Changing a bot:** `uvx med-lit-mcp setup bot --edit "SDM watch"` opens a menu:
 
@@ -210,7 +225,7 @@ Setup asks which search to keep running (it copies that search's question and sc
 | Screening criteria (opens your editor) | A new criteria revision. The next runs re-screen everything collected; articles that become excludes are withdrawn from the wiki and the entity pages that cited them are rewritten. |
 | Search question (copied from another search, or edited) | A new question version. The next run searches again from the bot's start date with it; known articles are skipped. |
 | Pause or resume | Pauses or resumes the Hermes job. |
-| Archive | Removes the schedule. The folder, wiki, reports and history stay. |
+| Archive | Removes the schedule. The folder, wiki, reports and history stay; delete the folder yourself if you no longer want it. |
 
 Every question and criteria version is kept in `.med-lit/bot.json`. A normal chat can read a bot project but not change its question, criteria or settings.
 
@@ -221,8 +236,11 @@ Every question and criteria version is kept in `.med-lit/bot.json`. A normal cha
 | `bot.max_syntheses` | 15 | Entity pages written or rewritten per run. |
 | `search.per_source` | 100 | Records requested per source. A bot sees new articles only among these, so the report warns when a source had more matches. |
 
+Set your own defaults for new bots under `"bot"` in `defaults.json` (see [Review settings](#review-settings)).
+
 Notes:
-- The bot uses the `medlitbot` profile's model; change it with `hermes -p medlitbot model`. Jobs fire while the Hermes gateway runs (`hermes -p medlitbot cron status`); see past runs with `hermes -p medlitbot cron runs <job id>`.
+- The bot uses the `medlitbot` profile's model; change it with `hermes -p medlitbot model`. Jobs fire while the Hermes gateway runs (`hermes -p medlitbot cron status`); list past runs with `hermes -p medlitbot cron runs <job id>`.
+- An [OpenAlex key](https://openalex.org/settings/api) is worth adding for bots: without one, OpenAlex may refuse searches when it is busy.
 - Europe PMC cannot be searched by a bot.
 
 ## Entity types, roles and relationships
@@ -301,7 +319,7 @@ uvx ruff check src
 npx @modelcontextprotocol/inspector uv run med-lit-mcp
 ```
 
-To run a server from a checkout, use `uv run --directory /path/to/med-lit-mcp med-lit-mcp` as the MCP command. Unlike `uvx --from <path>`, it always runs the checkout's current code.
+To run a server from a checkout, use `uv run --directory /path/to/med-lit-mcp med-lit-mcp` as the MCP command. Unlike `uvx --from <path>`, it always runs the checkout's current code. `setup --dev /path/to/med-lit-mcp` and `setup bot --dev /path/to/med-lit-mcp` register that command for you (run them with `uv run med-lit-mcp …` from the checkout).
 
 Windows is not supported (run locks use `fcntl`).
 
