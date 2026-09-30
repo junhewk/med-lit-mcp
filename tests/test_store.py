@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
 import shutil
 import sqlite3
+from unittest.mock import patch
 
 from helpers import Case
 
-from med_lit_mcp import projects
+from med_lit_mcp import config, projects
 from med_lit_mcp.store import MIGRATIONS, database
 
 
@@ -44,6 +46,19 @@ class StoreTests(Case):
         with self.assertRaisesRegex(ValueError, "already a project"):
             projects.create_project("Other", str(second.root))
         self.assertEqual(projects.create_project("a/b:c").root.name, "a b c")
+
+    def test_folder_settings_expand_variables_and_never_depend_on_the_working_directory(self) -> None:
+        home = self.root / "home"
+        with patch.dict(os.environ, {"HOME": str(home), "MED_LIT_PROJECTS_DIR": "${HOME}/reviews"}):
+            self.assertEqual(config.projects_dir(), home / "reviews")
+            created = projects.create_project("Desktop test")
+            self.assertEqual(created.root, home / "reviews" / "Desktop test")
+            nested = projects.create_project("Nested", "topics/nested")
+            self.assertEqual(nested.root, home / "reviews" / "topics" / "nested")
+        with patch.dict(os.environ, {"HOME": str(home), "MED_LIT_PROJECTS_DIR": "relative/reviews"}):
+            self.assertEqual(config.projects_dir(), home / "relative" / "reviews")
+        with patch.dict(os.environ, {"HOME": str(home), "MED_LIT_PROJECTS_DIR": "  "}):
+            self.assertEqual(config.projects_dir(), home / "med-lit")
 
     def test_moved_project_is_found_again_with_its_runs(self) -> None:
         run_id = self.make_run()

@@ -6,17 +6,27 @@ import os
 from pathlib import Path
 
 
+def user_path(value: str, base: Path | None = None) -> Path:
+    """A folder setting as an absolute path: expands $VARS and ~; relative means under base or home.
+
+    MCP clients start servers from arbitrary working directories (Claude Desktop uses the extension's
+    install folder) and may pass defaults such as "${HOME}/med-lit" unexpanded.
+    """
+    path = Path(os.path.expandvars(value.strip())).expanduser()
+    return path if path.is_absolute() else (base or Path.home()) / path
+
+
 def state_dir() -> Path:
     """Where the registry of projects lives (not the projects themselves)."""
-    configured = os.environ.get("MED_LIT_STATE_DIR")
+    configured = os.environ.get("MED_LIT_STATE_DIR", "").strip()
     if configured:
-        return Path(configured).expanduser()
-    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "med-lit-mcp"
+        return user_path(configured)
+    return user_path(os.environ.get("XDG_DATA_HOME") or "~/.local/share") / "med-lit-mcp"
 
 
 def projects_dir() -> Path:
     """Default parent folder for new projects."""
-    return Path(os.environ.get("MED_LIT_PROJECTS_DIR") or Path.home() / "med-lit").expanduser()
+    return user_path(os.environ.get("MED_LIT_PROJECTS_DIR", "").strip() or "~/med-lit")
 
 
 def ncbi_email(*, required: bool = False) -> str | None:
