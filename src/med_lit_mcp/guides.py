@@ -53,14 +53,17 @@ non-zero records_filtered_by_source. A retrieved and screened set is not a compl
   NCBI before use.
 - Filters: add only restrictions the researcher asked for. Without filters.from_date the search
   covers only the last three years; validate_question states the effective start date.
-- Sources: default pubmed, pmc, openalex (plus semantic-scholar when SEMANTIC_SCHOLAR_API_KEY is set).
+- Sources: default pubmed, pmc, openalex, plus semantic-scholar and scopus when their keys are set.
   europepmc must be searched on its own.
 - Pass project to validate_question: the project's settings fill in the year window, languages,
   publication types and sources when the question does not set them, and the result lists them.
 - validate_question returns a question_id. After the researcher approves exactly what was shown,
   including the settings, pass that id to start_search; to change anything, validate again.
-- Preprints are dropped at import unless the project's search.preprint_allow is true; the run status
-  counts them as skipped_preprints.""",
+- Preprints are excluded in each source's query unless the project's search.preprint_allow is true;
+  any that still come back are dropped and counted as skipped_preprints.
+- A later search in the same project imports only articles new to the project (matched by DOI,
+  PMID, PMCID or record id). Articles an earlier search found are counted as already_known and keep
+  that search's screening and wiki work; say so when reporting the results.""",
     "screening": """\
 # Screening titles and abstracts
 

@@ -82,9 +82,9 @@ Instead of the extension, you can add the server to `claude_desktop_config.json`
 |---|---|
 | `NCBI_EMAIL` | **Required** for PubMed/PMC search and for fetching. Also sent to Unpaywall, which requires a contact email. Use a real address. |
 | `NCBI_API_KEY` | Optional; raises NCBI rate limits. |
-| `SEMANTIC_SCHOLAR_API_KEY` (or `S2_API_KEY`) | Enables Semantic Scholar by default. Without a key it shares a public rate limit that usually answers HTTP 429, so it is skipped unless requested. [Request a free key](https://www.semanticscholar.org/product/api#api-key-form). |
-| `OPENALEX_API_KEY` | Optional OpenAlex key. |
-| `SCOPUS_API_KEY`, `SCOPUS_INSTTOKEN` | Optional Scopus access. Elsevier keys usually work only from an institution's network; the institutional token lifts that. `keys test scopus` tells you which applies. |
+| `SEMANTIC_SCHOLAR_API_KEY` (or `S2_API_KEY`) | Adds Semantic Scholar to the default sources. Without a key it shares a public rate limit that usually answers HTTP 429, so it is skipped unless requested. [Request a free key](https://www.semanticscholar.org/product/api#api-key-form). |
+| `OPENALEX_API_KEY` | Optional but recommended free [OpenAlex key](https://openalex.org/settings/api). OpenAlex meters keyless use and throttles keyless searches when it is busy. |
+| `SCOPUS_API_KEY`, `SCOPUS_INSTTOKEN` | Adds Scopus to the default sources. Elsevier keys usually work only from an institution's network; the institutional token lifts that. `keys test scopus` tells you which applies. |
 | `MED_LIT_PROJECTS_DIR` | Where new projects are created when no path is given. Default: `~/med-lit`. |
 | `MED_LIT_STATE_DIR` | Where the list of known projects is kept. Default: `$XDG_DATA_HOME/med-lit-mcp` or `~/.local/share/med-lit-mcp`. |
 | `MED_LIT_STAGES` | Optional, for advanced users. Exposes only the tools up to a stage: `search`, `screening`, `fetch` or `wiki` (default: all). For example, `fetch` hides the 11 wiki tools. Clients that load tools on demand rarely need this; it helps with clients that load every tool up front. Project, status and guide tools are always available. |
@@ -95,10 +95,10 @@ Each review keeps its own settings in `med-lit.settings.json`, a visible file at
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `search.sources` | `null` | Sources to search; `null` means PubMed, PMC and OpenAlex, plus Semantic Scholar when its key is set. |
+| `search.sources` | `null` | Sources to search; `null` means PubMed, PMC and OpenAlex, plus Semantic Scholar and Scopus when their keys are set. Europe PMC is searched on its own. |
 | `search.per_source` | 20 | Records requested from each source (1–200). |
 | `search.years` | `null` | Publication years: `"2020-"`, `"2010-2020"` or `"all"`. `null` means the last three years. Dates written into the question itself take precedence. |
-| `search.preprint_allow` | `false` | Keep preprints (medRxiv, bioRxiv, arXiv, Research Square, SSRN, …). When `false` they are dropped at import and counted in the run's `skipped_preprints`. |
+| `search.preprint_allow` | `false` | Keep preprints (medRxiv, bioRxiv, arXiv, Research Square, SSRN, …). When `false` each source's query excludes them where it can (PubMed, PMC, OpenAlex, Europe PMC); elsewhere they are recognised by venue, DOI and type, dropped, and counted in the run's `skipped_preprints`. |
 | `search.languages`, `search.publication_types` | `[]` | Filters applied when the question has none, for example `["english"]` or `["review"]`. |
 | `fetch.limit` | `null` | Most included articles to fetch per search. Articles are fetched in search-rank order; those beyond the limit are marked `skipped`. |
 | `fetch.mode` | `"full_text"` | `"abstract_only"` skips PMC and Unpaywall. |
@@ -163,7 +163,9 @@ Claude Code also exposes the guided prompts `/mcp__med-lit__plan_search`, `scree
 
 How the stages work:
 - **Question structure.** Groups within a component are ANDed, and a group's synonyms are ORed. Give each separately required facet (for example technology and task) its own group; put only true synonyms in a group; leave out ambiguous bare acronyms such as `LLM` unless you approve them. PCC context is for the setting only. Groups can suggest candidate MeSH headings, which are checked against NCBI before use.
-- **Date range.** Without a `from_date` filter or a `search.years` setting, a search covers only the last three years. `validate_question` states the effective start date, so ask for an earlier one if you need it.
+- **Date range.** Without a `from_date` filter or a `search.years` setting, a search covers only the last three years. `validate_question` states the effective start date, so ask for an earlier one if you need it. Dates are applied to the day in every source except Scopus, which searches whole years; its results are then trimmed to the exact dates by cover date.
+- **Repeat searches.** A later search in the same project imports only articles new to the project, matched by DOI, PMID, PMCID or record id across sources. Articles an earlier search already found are counted as `already_known` and keep that search's screening decisions and wiki work.
+- **Scopus** returns abstracts and full author lists when your institution subscribes (the COMPLETE view); otherwise it falls back to titles and first authors only.
 - **Screening** uses titles and abstracts only. Include and exclude decisions need a verbatim quote from the record. A decision whose quote cannot be verified is stored as `uncertain`, and uncertain articles wait for the researcher's own decision.
 - **Changing criteria** requires `replace=true`, starts a new revision, and re-screens every article. Earlier decisions stay in the history.
 - **Fetch** tries PMC full text (NCBI, then Europe PMC). For articles without a PMCID it asks [Unpaywall](https://unpaywall.org) for legal open-access copies of the DOI, preferring a PMC copy and otherwise extracting text from an open-access PDF. The abstract is the last resort, and abstract-only articles are always labelled as such. Articles are fetched in search-rank order, so a `fetch.limit` keeps the best-ranked ones. The source, license and version (published, accepted or submitted) of each full text are recorded. To retry abstract-only articles later, ask for a fetch with `retry_abstract_only`.

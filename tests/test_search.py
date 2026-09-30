@@ -72,6 +72,9 @@ class SearchTests(Case):
             keyed = search.validate_question(dated)
         self.assertEqual((keyed["sources"][-1], keyed["warnings"]), ("semantic-scholar", []))
         self.assertIn("429", warnings(QUESTION, ["semantic-scholar"]))
+        self.assertIn("SCOPUS_API_KEY", warnings(QUESTION, ["scopus"]))
+        with patch.dict(os.environ, {"SCOPUS_API_KEY": "key"}):
+            self.assertEqual(search.validate_question(QUESTION)["sources"][-1], "scopus")
         with patch.dict(os.environ, {"NCBI_EMAIL": ""}):
             self.assertIn("NCBI_EMAIL", warnings(QUESTION))
         with self.assertRaisesRegex(ValueError, "europepmc runs on its own"):
@@ -196,7 +199,10 @@ class SearchTests(Case):
         with patch.object(search, "safe_http", return_value=json.dumps(payload).encode()) as request:
             result = search.start_search(self.project, QUESTION, ["europepmc"], limit_per_source=3, wait_seconds=0)
         self.assertEqual(result["candidates"], 1)
-        self.assertIn("TITLE_ABS", request.call_args.args[0])
+        url = request.call_args.args[0]
+        self.assertIn("TITLE_ABS", url)
+        self.assertIn("NOT+SRC%3APPR", url)  # preprints are excluded by default
+        self.assertIn("FIRST_PDATE%3A%5B", url)  # the three-year default applies here too
         item = read_json(run_dir(result["run_id"]) / RUN_FILE)["articles"]["pmc:PMC123"]
         self.assertEqual(item["record"]["abstract"], "Training & evaluation.")
 
@@ -208,3 +214,30 @@ class SearchTests(Case):
         atomic_json(path / RUN_FILE, manifest)
         with self.assertRaisesRegex(ValueError, "read-only"):
             search.resume_search(run_id, wait_seconds=0)
+
+
+class KnownArticleTests(Case):
+    def search(self, records: list[dict[str, Any]], sources: list[str] | None = None) -> dict[str, Any]:
+        def launch(argv: list[str], **kwargs: Any) -> FakeProcess:
+            write_results(Path(argv[argv.index("--output") + 1]), records)
+            return FakeProcess(argv, write=False, **kwargs)
+
+        with patch.object(search.subprocess, "Popen", side_effect=launch):
+            return search.start_search(self.project, QUESTION, sources or ["pubmed", "openalex"], wait_seconds=0)
+
+    def test_a_later_search_imports_only_articles_new_to_the_project(self) -> None:
+        first = self.search([record(1), record(2, pmcid="PMC2")])
+        self.assertEqual(first["candidates"], 2)
+        # The same article found again under other identifiers: by DOI, by PMCID, and by uid.
+        by_doi = {"source": "openalex", "source_id": "W1", "doi": "https://doi.org/10.1/EXAMPLE.1", "title": "Same"}
+        by_pmcid = {"source": "openalex", "source_id": "W2", "pmcid": "2", "title": "Same"}
+        second = self.search([by_doi, by_pmcid, record(1), record(3)])
+        self.assertEqual((second["candidates"], second["already_known"]), (1, 3))
+        manifest = read_json(run_dir(second["run_id"]) / RUN_FILE)
+        self.assertEqual(list(manifest["articles"]), ["pubmed:3"])
+        self.assertEqual(manifest["already_known"]["openalex:W1"], {"run_id": first["run_id"], "uid": "pubmed:1"})
+
+    def test_one_article_from_two_sources_in_one_search_is_imported_once(self) -> None:
+        twin = {"source": "openalex", "source_id": "W9", "doi": "10.1/example.9", "title": "Twin"}
+        result = self.search([record(9), twin])
+        self.assertEqual((result["candidates"], result["already_known"]), (1, 0))

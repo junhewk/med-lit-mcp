@@ -14,6 +14,7 @@ from .artifacts import (
 from .config import Credentials
 from .http import HttpSession
 from .models import Strategy, language_code
+from .preprints import is_preprint
 from .providers import Provider, provider_for
 from .ranking import RANKING_VERSION, deduplicate, rank_records
 
@@ -215,6 +216,17 @@ async def _retrieve_source(
 
 def _passes_filters(record: dict[str, Any], strategy: Strategy) -> bool:
     filters = strategy.question.filters
+    if filters.exclude_preprints and is_preprint(record):
+        return False
+    source = strategy.strategies.get(str(record.get("source")))
+    if source and any(d.feature == "date_precision" for d in source.degradations):
+        # The query could only narrow by year; apply the exact bounds to full dates.
+        published = str(record.get("publication_date") or "")
+        if len(published) == 10 and (
+            (filters.from_date and published < filters.from_date)
+            or (filters.to_date and published > filters.to_date)
+        ):
+            return False
     language = language_code(str(record.get("language") or ""))
     if filters.languages and language:
         allowed = {language_code(value) for value in filters.languages}

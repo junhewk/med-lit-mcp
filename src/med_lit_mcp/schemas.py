@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .ontology import ENTITY_TYPES, MENTION_ROLES
 
-Source = Literal["pubmed", "pmc", "openalex", "semantic-scholar", "europepmc"]
+Source = Literal["pubmed", "pmc", "openalex", "semantic-scholar", "scopus", "europepmc"]
 EntityType = Literal[tuple(ENTITY_TYPES)]  # type: ignore[valid-type]
 MentionRole = Literal[tuple(MENTION_ROLES)]  # type: ignore[valid-type]
 

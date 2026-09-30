@@ -45,6 +45,7 @@ def summary(manifest: dict[str, Any]) -> dict[str, Any]:
         "source_failures": manifest.get("source_failures", {}),
         "records_by_source": manifest.get("records_by_source", {}),
         "records_filtered_by_source": manifest.get("records_filtered_by_source", {}),
+        "already_known": len(manifest.get("already_known", {})),
         "skipped_preprints": len(manifest.get("skipped_preprints", [])),
         "fetch": {state: sum(item["fetch"] == state for item in articles.values()) for state in FETCH_STATES},
         "wiki": {state: sum(item["wiki"] == state for item in articles.values()) for state in WIKI_STATES},
