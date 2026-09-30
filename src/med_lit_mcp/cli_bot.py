@@ -255,6 +255,9 @@ def edit(args: argparse.Namespace, console: Console) -> int:
     project = projects.get_project(args.edit)
     state = bot.read_state(project)
     job_id = (state.get("hermes") or {}).get("job_id")
+    if job_id:
+        # Keep the job's instructions current with this version of med-lit.
+        job_command(hermes, "edit", job_id, "--prompt", bot.cron_prompt(project.name))
     while True:
         state = bot.read_state(project)
         print(f"\n{project.name}: {state['status']}, {schedule_text(state['schedule'])}")
