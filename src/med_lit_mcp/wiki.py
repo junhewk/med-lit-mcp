@@ -143,6 +143,32 @@ def _reset_if_changed(conn: sqlite3.Connection, row: sqlite3.Row) -> None:
         _mark_stale(conn, touched)
 
 
+def withdraw_article(conn: sqlite3.Connection, uid: str, min_sources: int) -> set[int]:
+    """Remove an article from the wiki after screening turned it into an exclude.
+
+    Its mentions, evidence, extraction pages and stored text go; entity pages that cited it are
+    rewritten (or lose their synthesis when too few sources remain). The run keeps its record and
+    screening history, and the article is fetched again if it is ever included again."""
+    with transaction(conn):
+        touched = {r[0] for r in conn.execute("SELECT entity_id FROM kg_mentions WHERE article_uid=?", (uid,))}
+        conn.execute("DELETE FROM kg_mentions WHERE article_uid=?", (uid,))
+        conn.execute("DELETE FROM kg_relationship_evidence WHERE article_uid=?", (uid,))
+        conn.execute(
+            "DELETE FROM kg_relationships WHERE id NOT IN (SELECT DISTINCT relationship_id FROM kg_relationship_evidence)"
+        )
+        conn.execute("DELETE FROM kg_extraction_pages WHERE article_uid=?", (uid,))
+        conn.execute("DELETE FROM articles WHERE uid=?", (uid,))
+        _mark_stale(conn, touched)
+        if touched:
+            marks = ",".join("?" * len(touched))
+            conn.execute(
+                f"""DELETE FROM kg_syntheses WHERE entity_id IN ({marks}) AND entity_id IN
+                    (SELECT entity_id FROM kg_entity_stats WHERE source_count < ?)""",
+                [*touched, min_sources],
+            )
+    return touched
+
+
 def _page_count(
     conn: sqlite3.Connection, row: sqlite3.Row, max_pages: int | None, *, override: bool = False
 ) -> int:
@@ -916,8 +942,10 @@ def _finish_articles(run_id: str) -> None:
 SYNTHESIS_BATCH = 5
 
 
-def work_plan(run_id: str) -> dict[str, Any]:
-    """Self-contained tasks for the current wiki step, each small enough for one fresh subagent."""
+def work_plan(run_id: str, max_syntheses: int | None = None) -> dict[str, Any]:
+    """Self-contained tasks for the current wiki step, each small enough for one fresh subagent.
+
+    max_syntheses caps the entity pages handed out in this plan (a bot run's allowance)."""
     project, _ = locate(run_id)
     manifest = load_manifest(run_id)
     uids = _fetched_uids(manifest)
@@ -966,11 +994,12 @@ def work_plan(run_id: str) -> dict[str, Any]:
             )
         ]
         step = "duplicates"
-    elif queue:
-        batches = -(-len(queue) // SYNTHESIS_BATCH)
+    elif queue and max_syntheses != 0:
+        total = len(queue) if max_syntheses is None else min(len(queue), max_syntheses)
+        sizes = [min(SYNTHESIS_BATCH, total - start) for start in range(0, total, SYNTHESIS_BATCH)]
         tasks = [
             (
-                f"med-lit wiki synthesis, project {project.name!r}, run {run_id}. Up to {SYNTHESIS_BATCH} times: "
+                f"med-lit wiki synthesis, project {project.name!r}, run {run_id}. Up to {size} times: "
                 f"call next_synthesis(project={project.name!r}, run_id='{run_id}', min_sources={min_sources}); "
                 "stop if it reports done. "
                 "Write a neutral article describing how the gathered sources depict the entity (sections: "
@@ -978,7 +1007,8 @@ def work_plan(run_id: str) -> dict[str, Any]:
                 "Relationships), citing sources inline as [uid] and linking entities as [[Name]], then call "
                 "record_synthesis(project={project.name!r}, ...) with the same entity_id and input_digest. " + common
             )
-        ] * batches
+            for size in sizes
+        ]
         step = "synthesize"
     else:
         return {

@@ -13,6 +13,8 @@ The registry of known projects is only a convenience; open_project re-registers 
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import uuid
 from collections.abc import Iterator
@@ -23,7 +25,7 @@ from typing import Any
 
 from .config import projects_dir, state_dir, user_path
 from .ontology import ONTOLOGY_VERSION
-from .settings import new_settings, write_settings
+from .settings import new_settings, settings_path, write_settings
 from .store import RUN_FILE, RUN_ID, atomic_json, file_lock, now, read_json
 
 WORK = ".med-lit"
@@ -48,8 +50,21 @@ class Project:
     def runs(self) -> Path:
         return self.work / "runs"
 
+    @property
+    def mode(self) -> str:
+        """interactive or bot, read cheaply from the settings file."""
+        try:
+            return str(json.loads(settings_path(self.root).read_text(encoding="utf-8")).get("mode", "interactive"))
+        except (OSError, ValueError):
+            return "interactive"
+
     def summary(self) -> dict[str, Any]:
         return {"project": self.name, "path": str(self.root)}
+
+
+def scope() -> str:
+    """MED_LIT_SCOPE=bot: the server of the bot's Hermes profile sees only bot projects."""
+    return "bot" if os.environ.get("MED_LIT_SCOPE", "").strip().lower() == "bot" else "all"
 
 
 def _registry_file() -> Path:
@@ -128,7 +143,13 @@ def open_project(path: str) -> Project:
 
 def _registered() -> dict[str, dict[str, str]]:
     path = _registry_file()
-    return read_json(path).get("projects", {}) if path.exists() else {}
+    entries = read_json(path).get("projects", {}) if path.exists() else {}
+    if scope() == "bot":
+        entries = {
+            name: entry for name, entry in entries.items()
+            if (project := _load(name, entry)) is not None and project.mode == "bot"
+        }
+    return entries
 
 
 def _load(name: str, entry: dict[str, str]) -> Project | None:
@@ -144,14 +165,18 @@ def list_projects() -> list[dict[str, Any]]:
     rows = []
     for name, entry in sorted(_registered().items()):
         project = _load(name, entry)
-        rows.append(
-            {
-                "project": name,
-                "path": entry["path"],
-                "available": project is not None,
-                "runs": len(list(project.runs.glob(f"*/{RUN_FILE}"))) if project else 0,
-            }
-        )
+        row = {
+            "project": name,
+            "path": entry["path"],
+            "available": project is not None,
+            "mode": project.mode if project else None,
+            "runs": len(list(project.runs.glob(f"*/{RUN_FILE}"))) if project else 0,
+        }
+        if project and project.mode == "bot":
+            from .bot import bot_brief
+
+            row["bot"] = bot_brief(project)
+        rows.append(row)
     return rows
 
 

@@ -20,6 +20,7 @@ from .store import atomic_text
 
 SETTINGS_FILE = "med-lit.settings.json"
 SETTINGS_VERSION = 1
+BOT_PER_SOURCE = 100
 YEARS = re.compile(r"^(?:all|(\d{4})-(\d{4})?)$")
 
 
@@ -119,6 +120,10 @@ def save_user_defaults(mode: str, values: dict[str, Any]) -> Path:
 
 def _build(mode: str, overrides: dict[str, Any]) -> ProjectSettings:
     base = ProjectSettings(mode=mode, bot=BotSettings() if mode == "bot" else None).model_dump()
+    if mode == "bot":
+        # A bot re-searches its whole look-back window and skips what it knows, so new articles
+        # are found only if the window's matches fit in the records requested per source.
+        base["search"]["per_source"] = BOT_PER_SOURCE
     try:
         return ProjectSettings.model_validate(_merge(base, overrides) | {"mode": mode})
     except ValidationError as exc:

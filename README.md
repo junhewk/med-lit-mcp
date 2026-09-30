@@ -87,7 +87,8 @@ Instead of the extension, you can add the server to `claude_desktop_config.json`
 | `SCOPUS_API_KEY`, `SCOPUS_INSTTOKEN` | Adds Scopus to the default sources. Elsevier keys usually work only from an institution's network; the institutional token lifts that. `keys test scopus` tells you which applies. |
 | `MED_LIT_PROJECTS_DIR` | Where new projects are created when no path is given. Default: `~/med-lit`. |
 | `MED_LIT_STATE_DIR` | Where the list of known projects is kept. Default: `$XDG_DATA_HOME/med-lit-mcp` or `~/.local/share/med-lit-mcp`. |
-| `MED_LIT_STAGES` | Optional, for advanced users. Exposes only the tools up to a stage: `search`, `screening`, `fetch` or `wiki` (default: all). For example, `fetch` hides the 11 wiki tools. Clients that load tools on demand rarely need this; it helps with clients that load every tool up front. Project, status and guide tools are always available. |
+| `MED_LIT_SCOPE` | Set to `bot` by `setup bot` for the `medlitbot` Hermes profile: that server sees only bot projects and cannot create projects or decide uncertain articles. |
+| `MED_LIT_STAGES` | Optional, for advanced users. Exposes only the tools up to a stage: `search`, `screening`, `fetch` or `wiki` (default: all). For example, `fetch` hides the 11 wiki tools and the 3 bot tools. Clients that load tools on demand rarely need this; it helps with clients that load every tool up front. Project, status and guide tools are always available. |
 
 ### Review settings
 
@@ -180,6 +181,51 @@ Long steps are split into bounded calls. If a call reports `running` or `remaini
 
 If some sources fail while others succeed (for example PMC answering HTTP 500 while NCBI is degraded), the run completes with the working sources and lists the rest in `source_failures`. Later, `resume_search` with `retry_failed_sources=true` searches only the failed sources again and adds their new records to the same run. Those records then appear as pending in screening.
 
+## Bots: keep a review up to date (Hermes)
+
+A **bot project** re-runs a search you have already tried, on a schedule, and adds what is new: it screens new articles, fetches the included ones, extracts them into the wiki and rewrites the entity pages their evidence changes. Bots run as Hermes scheduled jobs.
+
+```bash
+uvx med-lit-mcp setup bot
+```
+
+Setup asks which search to keep running (it copies that search's question and screening criteria from a normal review), a name, how often and when to run, and the per-run limits. It then:
+- creates the bot project, which starts empty and holds only what the bot finds from now on;
+- creates the Hermes profile `medlitbot` once, shared by all bots. It is a copy of your current Hermes settings, but its scheduled runs get only the med-lit tools and subagents, and its med-lit server sees only bot projects;
+- adds one scheduled job per bot. Several bots are fine; setup suggests start times 30 minutes apart so they do not share your model at once.
+
+**Each run:**
+- searches articles published in the look-back window (90 days by default; open-ended, since journals date issues ahead) and takes in only articles new to the project, at most `max_new_articles`, best-ranked first. The rest are listed in the report and can be picked up by a later run;
+- screens them against the frozen criteria, then fetches and extracts the included ones and writes or rewrites at most `max_syntheses` entity pages;
+- starts no new work after its time budget, and never overlaps with another run of the same bot. Unfinished work carries over;
+- writes a report to `updates/<date>.md` in the project folder and replies with it. A run that found nothing stays silent.
+
+**Uncertain articles wait for you.** The bot never decides them. Open the bot project in a normal chat ("show the uncertain articles in SDM watch") and decide them with `review_article`; the next run fetches and adds the ones you include.
+
+**Changing a bot:** `uvx med-lit-mcp setup bot --edit "SDM watch"` opens a menu:
+
+| Change | What happens |
+|---|---|
+| Schedule; caps, look-back, time budget, records per source | Applies from the next run. |
+| Screening criteria (opens your editor) | A new criteria revision. The next runs re-screen everything collected; articles that become excludes are withdrawn from the wiki and the entity pages that cited them are rewritten. |
+| Search question (copied from another search, or edited) | A new question version. The next run searches again from the bot's start date with it; known articles are skipped. |
+| Pause or resume | Pauses or resumes the Hermes job. |
+| Archive | Removes the schedule. The folder, wiki, reports and history stay. |
+
+Every question and criteria version is kept in `.med-lit/bot.json`. A normal chat can read a bot project but not change its question, criteria or settings.
+
+| Bot setting | Default | Meaning |
+|---|---|---|
+| `bot.lookback_days` | 90 | Publication-date window of each run. |
+| `bot.max_new_articles` | 20 | New articles taken in per run. |
+| `bot.max_syntheses` | 15 | Entity pages written or rewritten per run. |
+| `bot.time_budget_minutes` | 50 | No new work starts after this. |
+| `search.per_source` | 100 | Records requested per source. A bot sees new articles only among these, so the report warns when a source had more matches. |
+
+Notes:
+- The bot uses the `medlitbot` profile's model; change it with `hermes -p medlitbot model`. Jobs fire while the Hermes gateway runs (`hermes -p medlitbot cron status`); see past runs with `hermes -p medlitbot cron runs <job id>`.
+- Europe PMC cannot be searched by a bot.
+
 ## Entity types, roles and relationships
 
 The wiki is a small knowledge graph. Its model follows the lightweight ontology of the [Simple Graph Builder](https://github.com/junhewk/simple-graph-builder) Obsidian plugin: a few fixed entity types, free-form relationship verbs, and a detail note on each relationship. That plugin's types are general-purpose, so med-lit-mcp uses medical types, each refining exactly one of the plugin's types. The full contract is in [docs/ontology.md](docs/ontology.md).
@@ -210,6 +256,7 @@ The wiki is a small knowledge graph. Its model follows the lightweight ontology 
 | Fetch | `fetch_articles` |
 | Wiki | `wiki_tasks`, `next_wiki_article`, `get_article_page`, `record_extraction`, `find_entities`, `list_duplicate_candidates`, `resolve_duplicates`, `merge_entities`, `next_synthesis`, `record_synthesis`, `export_wiki` |
 | Status | `list_runs`, `get_run_status`, `list_articles` |
+| Bot runs | `bot_start`, `bot_next`, `bot_finish` (used by the scheduled jobs) |
 
 Tools that work on a whole project take a `project` name, which can be left out while only one project exists. Tools that work on one search take its run ID.
 

@@ -205,7 +205,35 @@ def keys_command(args: argparse.Namespace, console: Console) -> int:
     return 0
 
 
+def bot_main(argv: list[str]) -> int:
+    from . import cli_bot
+
+    parser = argparse.ArgumentParser(
+        prog="med-lit-mcp setup bot",
+        description="Create a scheduled bot project (a Hermes cron job), or change one with --edit.",
+    )
+    parser.add_argument("--edit", metavar="PROJECT", help="Change an existing bot: schedule, caps, criteria, question, pause, archive")
+    parser.add_argument("--from-run", metavar="RUN_ID", help="Copy the question and criteria from this search")
+    parser.add_argument("--name", help="Name of the new bot project")
+    parser.add_argument("--schedule", metavar="CRON", help="Cron schedule such as '0 5 * * *' (daily at 05:00)")
+    parser.add_argument("--dev", metavar="CHECKOUT", help="Run the bot's server from a source checkout (development)")
+    parser.add_argument("--yes", action="store_true", help="Accept defaults without asking")
+    args = parser.parse_args(argv)
+    if args.schedule and not re.fullmatch(r"\d{1,2} \d{1,2} \* \* [0-6*]", args.schedule.strip()):
+        parser.error("--schedule must look like 'M H * * *' (daily) or 'M H * * D' (weekly, D = 0-6, 0 = Sunday)")
+    try:
+        return cli_bot.main(args, Console(args.yes))
+    except (KeyboardInterrupt, EOFError):
+        print("\ncancelled", file=sys.stderr)
+        return 130
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+
 def main(argv: list[str]) -> int:
+    if argv[:2] == ["setup", "bot"]:
+        return bot_main(argv[2:])
     parser = argparse.ArgumentParser(prog="med-lit-mcp")
     commands = parser.add_subparsers(dest="command", required=True)
     setup_parser = commands.add_parser("setup", help="Set your email, reviews folder and API keys, and register with Hermes/Claude Code")

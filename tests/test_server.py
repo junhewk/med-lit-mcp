@@ -33,7 +33,7 @@ class ServerToolTests(Case, unittest.IsolatedAsyncioTestCase):
     async def test_full_workflow_through_mcp_tools(self) -> None:
         async with create_connected_server_and_client_session(mcp._mcp_server) as client:
             tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-            self.assertEqual(len(tools), 27)
+            self.assertEqual(len(tools), 30)
             self.assertIn("semantic-scholar", json.dumps(tools["validate_question"].inputSchema))
             self.assertNotIn("components", json.dumps(tools["start_search"].inputSchema))
             # Clients that load tools on demand find tools by name: every tool is named in the
@@ -134,7 +134,7 @@ class StdioTests(unittest.IsolatedAsyncioTestCase):
             async with stdio_client(params) as (read, write), ClientSession(read, write) as client:
                 initialized = await client.initialize()
                 self.assertIn("search -> screening -> fetch -> wiki", initialized.instructions)
-                self.assertEqual(len((await client.list_tools()).tools), 27)
+                self.assertEqual(len((await client.list_tools()).tools), 30)
                 result = await client.call_tool("list_projects", {})
                 self.assertFalse(result.isError)
 
@@ -172,7 +172,7 @@ class StdioTests(unittest.IsolatedAsyncioTestCase):
                 env={**os.environ, "MED_LIT_STATE_DIR": data, "MED_LIT_CONFIG_DIR": data, "NCBI_EMAIL": ""},
             )
         report = json.loads(completed.stdout)
-        self.assertEqual((report["database_schema"], report["ncbi_email"], report["tools"]), (1, False, 27))
+        self.assertEqual((report["database_schema"], report["ncbi_email"], report["tools"]), (1, False, 30))
         self.assertEqual(report["projects"], [])
         self.assertEqual(report["stages"], ["search", "screening", "fetch", "wiki"])
         self.assertIn("NCBI_EMAIL", completed.stderr)
