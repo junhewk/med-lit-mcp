@@ -162,6 +162,9 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 def main(argv: list[str] | None = None) -> None:
+    from .keys import load_into_environ
+
+    load_into_environ()
     parser = argparse.ArgumentParser(prog="med-lit-viewer")
     parser.add_argument("--directory", type=Path, default=Path(str(files("med_lit_mcp") / "viewer")))
     parser.add_argument("--host", default="127.0.0.1")
