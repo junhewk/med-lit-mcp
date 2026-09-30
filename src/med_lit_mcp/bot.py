@@ -5,7 +5,7 @@ A bot project has one standing run that every scheduled run adds to. One schedul
     bot_start   lock the project and search the look-back window into the standing run
                 (only articles new to it, at most bot.max_new_articles, best-ranked first)
     bot_next    the next piece of work for the agent: screen, fetch or wiki tasks, until the
-                work or the time budget runs out
+                run's capped work is done
     bot_finish  refresh the wiki, write updates/<date>.md and release the lock; the returned
                 message is the run's report, or [SILENT] when nothing happened
 
@@ -17,6 +17,7 @@ from the wiki), and a new question backfills from the bot's start date.
 from __future__ import annotations
 
 import copy
+import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
@@ -43,7 +44,9 @@ from .store import (
 BOT_FILE = "bot.json"
 UPDATES = "updates"
 SILENT = "[SILENT]"
-GRACE = timedelta(minutes=15)  # a crashed run's lock expires this long after its deadline
+# A run holds its project while the server process that started it is alive and still writing.
+# Hermes stops a cron run after 10 idle minutes, so an hour without writes means it is gone.
+STALE = timedelta(hours=1)
 SEARCH_WAIT = 200  # seconds a bot tool waits for its search before handing back
 
 
@@ -169,8 +172,22 @@ def _run_path(project: Project, state: dict[str, Any]) -> Path:
     return path
 
 
-def _deadline_passed(active: dict[str, Any]) -> bool:
-    return datetime.now(UTC) >= datetime.fromisoformat(active["deadline"])
+def _last_write(project: Project, state: dict[str, Any]) -> datetime:
+    paths = [project.runs / state["run_id"] / RUN_FILE, project.db, project.db.with_name(project.db.name + "-wal")]
+    stamps = [p.stat().st_mtime for p in paths if p.exists()]
+    started = datetime.fromisoformat(state["active"]["started_at"]).timestamp()
+    return datetime.fromtimestamp(max([started, *stamps]), UTC)
+
+
+def _run_alive(project: Project, state: dict[str, Any]) -> bool:
+    """Whether the run that holds the project is still going (not crashed, not hung)."""
+    try:
+        os.kill(int(state["active"]["pid"]), 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, KeyError, TypeError, ValueError):
+        pass
+    return datetime.now(UTC) - _last_write(project, state) < STALE
 
 
 def bot_start(name: str | None) -> dict[str, Any]:
@@ -182,16 +199,16 @@ def bot_start(name: str | None) -> dict[str, Any]:
         if state.get("status") != "active":
             raise ValueError(f"This bot is {state.get('status')}; resume it with `uvx med-lit-mcp setup bot --edit`")
         active = state.get("active")
-        if active and started < datetime.fromisoformat(active["deadline"]) + GRACE:
+        if active and _run_alive(project, state):
             return {"busy": True, "message": SILENT, "note": f"A run of this bot started at {active['started_at']} is still in progress"}
         if active:
-            state["history"].append(active | {"finished_at": now(), "outcome": "abandoned (lock expired)"})
+            state["history"].append(active | {"finished_at": now(), "outcome": "abandoned (its process ended or stalled)"})
         window = _today() - timedelta(days=settings.bot.lookback_days)
         backfill = state.get("backfill")
         from_date = min(window, date.fromisoformat(backfill["from_date"])) if backfill else window
         state["active"] = {
             "started_at": started.isoformat(),
-            "deadline": (started + timedelta(minutes=settings.bot.time_budget_minutes)).isoformat(),
+            "pid": os.getpid(),
             "from_date": from_date.isoformat(),
             "backfill": bool(backfill),
             "update": None,
@@ -220,7 +237,6 @@ def bot_start(name: str | None) -> dict[str, Any]:
         "run_id": state["run_id"],
         "window": f"published {from_date.isoformat()} or later" + (" (backfill for a new question)" if backfill else ""),
         "search": {k: result.get(k) for k in ("search_status", "search_error", "source_failures") if result.get(k)},
-        "deadline": state["active"]["deadline"],
         "next": f"Call bot_next(project={project.name!r}) and follow it until it says finish.",
     }
 
@@ -270,17 +286,13 @@ def bot_next(name: str | None) -> dict[str, Any]:
     active = state.get("active")
     if not active:
         raise ValueError(f"No bot run is in progress; call bot_start(project={project.name!r}) first")
-    if _deadline_passed(active):
-        return _finish_step(project, "time budget reached; the remaining work carries over to the next run")
     path = _run_path(project, state)
     run_id = state["run_id"]
     with locked_run(path) as manifest:
         search.poll(path, manifest)
         running = manifest["search_status"] == "running"
-    if running:
-        remaining = (datetime.fromisoformat(active["deadline"]) - datetime.now(UTC)).total_seconds()
-        if search._wait(path, max(0, min(SEARCH_WAIT, remaining)))["search_status"] == "running":
-            return {"step": "wait", "do": f"The search is still running; call bot_next(project={project.name!r}) again."}
+    if running and search._wait(path, SEARCH_WAIT)["search_status"] == "running":
+        return {"step": "wait", "do": f"The search is still running; call bot_next(project={project.name!r}) again."}
     manifest = read_json(path / RUN_FILE)
     revision = manifest.get("selection_revision")
     pending = sum((item.get("screening") or {}).get("revision") != revision for item in manifest["articles"].values())
@@ -379,8 +391,6 @@ def _render_report(project: Project, facts: dict[str, Any]) -> str:
             f"More records matched than were retrieved from {', '.join(facts['truncated_sources'])}; "
             "raise search.per_source with `setup bot --edit` if new articles may be missed."
         )
-    if facts["stopped_by_time"]:
-        problems.append("The time budget ran out; the remaining work continues in the next run.")
     left = facts["left"]
     if any(left.values()):
         problems.append(
@@ -449,7 +459,6 @@ def bot_finish(name: str | None) -> dict[str, Any]:
         "syntheses": _syntheses_since(project, started),
         "awaiting_review": awaiting,
         "withdrawn": active.get("withdrawn", []),
-        "stopped_by_time": _deadline_passed(active),
         "left": {
             "to screen": sum((i.get("screening") or {}).get("revision") != revision for i in manifest["articles"].values()),
             "to fetch": sum(is_eligible(i, revision) and i["fetch"] == "pending" for i in manifest["articles"].values()),
@@ -472,7 +481,7 @@ def bot_finish(name: str | None) -> dict[str, Any]:
             "included": facts["included"],
             "syntheses": len(facts["syntheses"]),
             "report": str(report.relative_to(project.root)) if report else None,
-            "outcome": "time budget reached" if facts["stopped_by_time"] else "finished",
+            "outcome": "finished",
         }
         fresh["history"] = (fresh.get("history") or [])[-199:] + [record]
         if fresh["active"].get("backfill") and update and not update.get("error") and not update.get("dropped_over_cap"):

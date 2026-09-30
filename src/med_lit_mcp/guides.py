@@ -53,8 +53,9 @@ non-zero records_filtered_by_source. A retrieved and screened set is not a compl
   NCBI before use.
 - Filters: add only restrictions the researcher asked for. Without filters.from_date the search
   covers only the last three years; validate_question states the effective start date.
-- Sources: default pubmed, pmc, openalex, plus semantic-scholar and scopus when their keys are set.
-  europepmc must be searched on its own.
+- Sources: leave sources out unless the researcher names some. The default is pubmed, pmc and
+  openalex, plus semantic-scholar and scopus when their keys are set. europepmc must be searched on
+  its own.
 - Pass project to validate_question: the project's settings fill in the year window, languages,
   publication types and sources when the question does not set them, and the result lists them.
 - validate_question returns a question_id. After the researcher approves exactly what was shown,

@@ -197,7 +197,7 @@ Setup asks which search to keep running (it copies that search's question and sc
 **Each run:**
 - searches articles published in the look-back window (90 days by default; open-ended, since journals date issues ahead) and takes in only articles new to the project, at most `max_new_articles`, best-ranked first. The rest are listed in the report and can be picked up by a later run;
 - screens them against the frozen criteria, then fetches and extracts the included ones and writes or rewrites at most `max_syntheses` entity pages;
-- starts no new work after its time budget, and never overlaps with another run of the same bot. Unfinished work carries over;
+- finishes all the work its caps allow; how long that takes depends on your model (about 3 minutes per full-text page with a local model). Two runs of the same bot never overlap, and work left by an interrupted run carries over;
 - writes a report to `updates/<date>.md` in the project folder and replies with it. A run that found nothing stays silent.
 
 **Uncertain articles wait for you.** The bot never decides them. Open the bot project in a normal chat ("show the uncertain articles in SDM watch") and decide them with `review_article`; the next run fetches and adds the ones you include.
@@ -206,7 +206,7 @@ Setup asks which search to keep running (it copies that search's question and sc
 
 | Change | What happens |
 |---|---|
-| Schedule; caps, look-back, time budget, records per source | Applies from the next run. |
+| Schedule; caps, look-back, records per source | Applies from the next run. |
 | Screening criteria (opens your editor) | A new criteria revision. The next runs re-screen everything collected; articles that become excludes are withdrawn from the wiki and the entity pages that cited them are rewritten. |
 | Search question (copied from another search, or edited) | A new question version. The next run searches again from the bot's start date with it; known articles are skipped. |
 | Pause or resume | Pauses or resumes the Hermes job. |
@@ -219,7 +219,6 @@ Every question and criteria version is kept in `.med-lit/bot.json`. A normal cha
 | `bot.lookback_days` | 90 | Publication-date window of each run. |
 | `bot.max_new_articles` | 20 | New articles taken in per run. |
 | `bot.max_syntheses` | 15 | Entity pages written or rewritten per run. |
-| `bot.time_budget_minutes` | 50 | No new work starts after this. |
 | `search.per_source` | 100 | Records requested per source. A bot sees new articles only among these, so the report warns when a source had more matches. |
 
 Notes:
