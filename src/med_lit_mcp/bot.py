@@ -346,7 +346,7 @@ def bot_next(name: str | None) -> dict[str, Any]:
     except ValueError:
         return _finish_step(project, "no included articles with text yet")
     if plan["step"] == "export":
-        reason = "all work done" if allowance > 0 else "synthesis cap for this run reached; stale pages carry over"
+        reason = "all work done" if allowance > 0 else "safety limit on entity pages (bot.max_syntheses) reached; the rest carry over"
         return _finish_step(project, reason)
     return {
         "step": "wiki",

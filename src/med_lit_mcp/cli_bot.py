@@ -135,7 +135,6 @@ def ask_schedule(console: Console, current: str | None = None) -> str:
 BOT_QUESTIONS = (
     ("bot.lookback_days", "Look back how many days of publications each run", int),
     ("bot.max_new_articles", "Most new articles taken in per run (the rest wait for a later run)", int),
-    ("bot.max_syntheses", "Most entity pages written per run", int),
     ("search.per_source", "Records requested from each source per run (1-200)", int),
 )
 

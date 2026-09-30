@@ -212,12 +212,12 @@ To run a bot now instead of waiting for its time, answer yes to setup's last que
 
 **Each run:**
 - searches articles published in the look-back window (90 days by default, open-ended because journals date issues ahead) and takes in only articles new to the project: at most `max_new_articles`, best-ranked first. Articles over the cap are not marked as seen, so later runs pick them up while they are still in the window;
-- screens them against the frozen criteria, fetches and extracts the included ones, and writes or updates at most `max_syntheses` entity pages (those with at least `wiki.min_sources` source articles): new pages first, then updates with the new evidence. The server enforces the cap;
+- screens them against the frozen criteria, fetches and extracts the included ones, and writes every entity page these articles make due (entities with at least `wiki.min_sources` source articles): new pages first, then updates with the new evidence. A run's size is therefore set by `max_new_articles`;
 - finishes all the work its caps allow, however long it takes. Two runs of the same bot never overlap; if a run is interrupted, the next one continues its unfinished work;
 - excludes articles with no DOI, PMID or PMCID and lists them in the report; ask for one in a normal chat to add it;
 - writes a report to `updates/<date>.md` in the project folder and replies with the same text, which Hermes saves under `~/.hermes/profiles/medlitbot/cron/output/<job id>/`. A run that found nothing stays silent and writes no report.
 
-**Choosing `max_new_articles`.** A run's length follows from its cap, not from the window. With a local model, a test bot took about 45 minutes for 5 new articles (3 included, 9 pages extracted, 9 entity pages written) and about 1 hour 50 minutes for 20 (15 included, 35 pages). Those runs predate page updates, when new evidence made central pages be rewritten in full. A new bot's first window usually holds a backlog: 129 matching articles in the test's 90 days. The cap works through it a run at a time, best-ranked first, and the report lists how many are waiting. A small cap keeps each run short; the few lowest-ranked articles may leave the 90-day window before a run reaches them.
+**Choosing `max_new_articles`.** A run's length follows from its cap, not from the window: the articles it takes in decide how many pages are extracted and how many entity pages fall due. With a local model, a test bot's run of 5 new articles (3 included) took 33 minutes: about 2.5 minutes per extracted article page and about 1 minute per entity page written. A new bot's first window usually holds a backlog: 129 matching articles in the test's 90 days. The cap works through it a run at a time, best-ranked first, and the report lists how many are waiting. A small cap keeps each run short; the few lowest-ranked articles may leave the 90-day window before a run reaches them.
 
 **Uncertain articles wait for you.** The bot never decides them; the report lists them with the bot's reasons. Open the bot project in a normal chat ("show the uncertain articles in SDM watch") and decide them with `review_article`; the next run fetches and adds the ones you include.
 
@@ -237,7 +237,7 @@ Every question and criteria version is kept in `.med-lit/bot.json`. A normal cha
 |---|---|---|
 | `bot.lookback_days` | 90 | Publication-date window of each run. |
 | `bot.max_new_articles` | 20 | New articles taken in per run. |
-| `bot.max_syntheses` | 15 | Entity pages written or updated per run. |
+| `bot.max_syntheses` | 100 | Safety limit on entity pages written or updated in one run, for exceptional events such as a criteria change. Normally every due page is written; pages over the limit wait for the next run. |
 | `search.per_source` | 100 | Records requested per source. A bot sees new articles only among these, so the report warns when a source had more matches. |
 
 Set your own defaults for new bots under `"bot"` in `defaults.json` (see [Review settings](#review-settings)).
