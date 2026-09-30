@@ -21,11 +21,13 @@ from .config import ncbi_email, state_dir
 from .fetch import safe_http
 from .medsearch.cli import _years_ago
 from .medsearch.models import Question, ValidationError
+from .medsearch.preprints import is_preprint
 from .projects import Project, new_run_dir, run_dir
 from .runs import summary
-from .settings import SearchSettings, is_preprint, load_settings, year_filters
+from .settings import SearchSettings, load_settings, year_filters
 from .store import (
     MANIFEST_VERSION,
+    RUN_FILE,
     RUN_ID,
     atomic_json,
     atomic_text,
@@ -35,9 +37,9 @@ from .store import (
     save_run,
 )
 
-SOURCES = ("pubmed", "pmc", "openalex", "semantic-scholar", "europepmc")
+SOURCES = ("pubmed", "pmc", "openalex", "semantic-scholar", "scopus", "europepmc")
 NCBI_SOURCES = {"pubmed", "pmc"}
-RETRYABLE = ("pubmed", "pmc", "openalex", "semantic-scholar")
+RETRYABLE = ("pubmed", "pmc", "openalex", "semantic-scholar", "scopus")
 SEARCH_TIMEOUT = 30 * 60
 QUESTION_COMPONENTS = {
     "PICO": (("population", "intervention"), ("comparison", "outcome")),
@@ -109,9 +111,17 @@ def semantic_scholar_key() -> bool:
     return bool(os.environ.get("SEMANTIC_SCHOLAR_API_KEY") or os.environ.get("S2_API_KEY"))
 
 
+def scopus_key() -> bool:
+    return bool(os.environ.get("SCOPUS_API_KEY"))
+
+
 def default_sources() -> list[str]:
-    """Keyless Semantic Scholar shares one public rate limit and mostly answers 429."""
-    return ["pubmed", "pmc", "openalex", *(["semantic-scholar"] if semantic_scholar_key() else [])]
+    """Keyless Semantic Scholar shares one public rate limit and mostly answers 429; Scopus needs a key."""
+    return [
+        "pubmed", "pmc", "openalex",
+        *(["semantic-scholar"] if semantic_scholar_key() else []),
+        *(["scopus"] if scopus_key() else []),
+    ]
 
 
 def validate_question(
@@ -126,6 +136,10 @@ def validate_question(
     for key in ("languages", "publication_types"):
         if not filters.get(key) and getattr(config, key):
             filters[key] = list(getattr(config, key))
+    # The project setting decides; the engine then filters preprints in each source's own query.
+    filters.pop("exclude_preprints", None)
+    if not config.preprint_allow:
+        filters["exclude_preprints"] = True
     chosen = normalize_sources(sources) or normalize_sources(config.sources)
     try:
         Question.from_dict(normalized)
@@ -147,6 +161,8 @@ def validate_question(
         )
     elif not chosen and not semantic_scholar_key():
         warnings.append("semantic-scholar is skipped by default until SEMANTIC_SCHOLAR_API_KEY is set")
+    if "scopus" in effective and not scopus_key():
+        warnings.append("scopus needs SCOPUS_API_KEY (uvx med-lit-mcp keys set scopus), so it will fail")
     question_id = uuid.uuid4().hex
     applied = {
         "years": config.years or "last three years (default)",
@@ -199,6 +215,34 @@ def record_uid(record: dict[str, Any]) -> str:
     return f"{source}:{source_id}"
 
 
+def _record_keys(uid: str, record: dict[str, Any]) -> list[str]:
+    """Identifiers that mark two records, possibly from different sources, as one article."""
+    keys = [f"uid:{uid}"]
+    doi = str(record.get("doi") or "").strip().lower().removeprefix("https://doi.org/")
+    if doi:
+        keys.append(f"doi:{doi}")
+    if record.get("pmid"):
+        keys.append(f"pmid:{str(record['pmid']).strip()}")
+    if record.get("pmcid"):
+        pmcid = str(record["pmcid"]).strip().upper()
+        keys.append(f"pmcid:{pmcid if pmcid.startswith('PMC') else 'PMC' + pmcid}")
+    return keys
+
+
+def known_articles(runs: Path) -> dict[str, tuple[str, str]]:
+    """Every article already in one of the project's runs: identifier key -> (run_id, uid)."""
+    index: dict[str, tuple[str, str]] = {}
+    for manifest_path in sorted(runs.glob(f"*/{RUN_FILE}")):
+        try:
+            other = read_json(manifest_path)
+        except (OSError, ValueError):
+            continue
+        for uid, item in (other.get("articles") or {}).items():
+            for key in _record_keys(uid, item.get("record") or {}):
+                index.setdefault(key, (other["run_id"], uid))
+    return index
+
+
 def import_results(path: Path, manifest: dict[str, Any]) -> None:
     """Import a finished search; a retry of failed sources merges into the earlier results."""
     name = manifest.get("search_output", "search")
@@ -223,18 +267,29 @@ def import_results(path: Path, manifest: dict[str, Any]) -> None:
     articles = manifest.setdefault("articles", {})
     ranks = _ranks(output / "ranked-results.jsonl")
     skipped = manifest.setdefault("skipped_preprints", [])
+    # Articles found by an earlier search of this project keep that search's decisions.
+    known = known_articles(path.parent)
+    already = manifest.setdefault("already_known", {})
     added = 0
     with results.open(encoding="utf-8") as handle:
         for line in handle:
             if line.strip():
                 record = json.loads(line)
                 uid = record_uid(record)
-                if uid in articles or uid in skipped:
+                if uid in articles or uid in skipped or uid in already:
                     continue
                 if not manifest.get("preprint_allow", False) and is_preprint(record):
                     skipped.append(uid)
                     continue
+                match = next((known[key] for key in _record_keys(uid, record) if key in known), None)
+                if match and match[0] == manifest["run_id"]:
+                    continue  # the same article from another source in this run
+                if match:
+                    already[uid] = {"run_id": match[0], "uid": match[1]}
+                    continue
                 articles[uid] = {"record": record, "fetch": "pending", "wiki": "pending", "rank": ranks.get(uid)}
+                for key in _record_keys(uid, record):
+                    known.setdefault(key, (manifest["run_id"], uid))
                 added += 1
     if retried:
         manifest["last_retry"] = {"sources": retried, "new_articles": added, "finished_at": now()}
@@ -272,7 +327,11 @@ def europepmc_query(question: dict[str, Any]) -> str:
                 blocks.append("(" + " OR ".join(quoted) + ")")
     if not blocks:
         raise ValueError("Europe PMC search needs structured question component groups")
-    return " AND ".join(blocks)
+    filters = question.get("filters") or {}
+    start = filters.get("from_date") or _years_ago(date.today(), 3).isoformat()  # noqa: DTZ011 - as the engine
+    blocks.append(f"FIRST_PDATE:[{start} TO {filters.get('to_date') or '*'}]")
+    query = " AND ".join(blocks)
+    return f"{query} NOT SRC:PPR" if filters.get("exclude_preprints") else query
 
 
 def search_europepmc(path: Path, question: dict[str, Any], limit: int) -> None:
@@ -416,8 +475,8 @@ def _status(path: Path, manifest: dict[str, Any]) -> dict[str, Any]:
     status = {
         key: result[key]
         for key in (
-            "run_id", "search_status", "search_error", "candidates", "source_failures",
-            "records_by_source", "records_filtered_by_source",
+            "run_id", "search_status", "search_error", "candidates", "already_known", "skipped_preprints",
+            "source_failures", "records_by_source", "records_filtered_by_source",
         )
     } | {"run_dir": str(path)}
     if manifest.get("last_retry"):

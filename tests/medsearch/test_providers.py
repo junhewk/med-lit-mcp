@@ -180,3 +180,36 @@ async def test_openalex_semantic_scholar_and_scopus_normalization() -> None:
         scopus = ScopusProvider(session, credentials)
         scopus_page = await scopus.fetch_page(strategy_for("scopus"), None, 10)
         assert scopus_page.records[0]["source_id"] == "3"
+
+
+@pytest.mark.asyncio
+async def test_scopus_complete_view_falls_back_to_standard() -> None:
+    views: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        views.append(request.url.params["view"])
+        if request.url.params["view"] == "COMPLETE" and "entitled" not in request.headers.get("x-els-apikey", ""):
+            return httpx.Response(401, json={"service-error": {"status": {"statusText": "view not authorized"}}})
+        entry = {
+            "dc:identifier": "SCOPUS_ID:9",
+            "dc:title": "Scopus title",
+            "dc:creator": "First A.",
+            "author": [{"authname": "First A."}, {"authname": "Second B."}],
+            "pubmed-id": "4242",
+        }
+        return httpx.Response(200, json={"search-results": {"opensearch:totalResults": "1", "entry": [entry]}})
+
+    strategy = strategy_for("scopus")
+    assert strategy.request_parameters["view"] == "COMPLETE"
+    async with HttpSession(intervals={"scopus": 0}, transport=httpx.MockTransport(handler)) as session:
+        entitled = ScopusProvider(session, Credentials(scopus_api_key="entitled-key"))
+        page = await entitled.fetch_page(strategy, None, 10)
+        assert page.records[0]["authors"] == ["First A.", "Second B."]
+        assert page.records[0]["pmid"] == "4242"
+        assert views == ["COMPLETE"]
+
+        views.clear()
+        basic = ScopusProvider(session, Credentials(scopus_api_key="basic-key"))
+        await basic.fetch_page(strategy, None, 10)
+        await basic.fetch_page(strategy, 1, 10)
+        assert views == ["COMPLETE", "STANDARD", "STANDARD"]  # remembered after the first refusal

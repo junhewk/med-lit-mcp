@@ -112,12 +112,39 @@ def test_pico_query_golden_dialects() -> None:
     assert strategy.strategies["openalex"].request_parameters["filter"] == (
         "from_publication_date:2020-01-01,to_publication_date:2026-08-08,language:en"
     )
-    assert strategy.strategies["semantic-scholar"].request_parameters["year"] == "2020-2026"
+    assert strategy.strategies["semantic-scholar"].request_parameters["publicationDateOrYear"] == (
+        "2020-01-01:2026-08-08"
+    )
     assert strategy.strategies["semantic-scholar"].request_parameters["endpoint"] == "bulk"
     assert " + " in strategy.strategies["semantic-scholar"].query
     assert strategy.strategies["scopus"].query.startswith("TITLE-ABS-KEY(")
     assert "PUBYEAR AFT 2019" in strategy.strategies["scopus"].query
     assert "PUBYEAR BEF 2027" in strategy.strategies["scopus"].query
+    assert "LANGUAGE(english)" in strategy.strategies["scopus"].query
+    assert strategy.strategies["scopus"].request_parameters["view"] == "COMPLETE"
+    assert "NOT preprint" not in pubmed.query
+
+
+def test_preprints_are_excluded_in_each_dialect() -> None:
+    question = pico_question()
+    question.filters.exclude_preprints = True
+    question.filters.to_date = None
+    strategy = compile_strategy(
+        question,
+        mode="review",
+        limit_per_source=100,
+        sources=["pubmed", "pmc", "openalex", "semantic-scholar", "scopus"],
+    )
+    parts = strategy.strategies
+    assert parts["pubmed"].query.endswith(" NOT preprint[pt]")
+    # PMC's preprint[pt] matches ordinary journal articles too.
+    assert parts["pmc"].query.endswith(" NOT preprint[filter]")
+    assert parts["pmc"].precision_query.endswith(" NOT preprint[filter]")
+    assert "type:!preprint" in parts["openalex"].request_parameters["filter"]
+    assert parts["semantic-scholar"].request_parameters["publicationDateOrYear"] == "2020-01-01:"
+    for source in ("semantic-scholar", "scopus"):
+        assert "preprint_filter" in {d.feature for d in parts[source].degradations}
+    assert Question.from_dict({**question.to_dict(), "schema_version": "2"}).filters.exclude_preprints
 
 
 def test_precision_selection_and_round_trip() -> None:

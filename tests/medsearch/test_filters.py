@@ -150,3 +150,26 @@ def test_a_language_code_survives_the_whole_round_trip() -> None:
     strategy = strategy_with(languages=["eng"])
     assert '"english"[Language]' in strategy.strategies["pubmed"].query
     assert _passes_filters({"language": "eng"}, strategy) is True
+
+
+def test_preprints_and_scopus_dates_are_filtered_client_side() -> None:
+    question = Question.from_dict(
+        {
+            "schema_version": "2",
+            "framework": "PICO",
+            "question": "A question",
+            "components": {
+                "population": {"groups": [{"label": "p", "text": "adults"}]},
+                "intervention": {"groups": [{"label": "i", "text": "aspirin"}]},
+            },
+            "filters": {"from_date": "2026-07-01", "exclude_preprints": True},
+        }
+    )
+    strategy = compile_strategy(question, mode="quick", limit_per_source=10, sources=["pubmed", "scopus"])
+    assert not _passes_filters({"source": "pubmed", "journal": "medRxiv"}, strategy)
+    assert not _passes_filters({"source": "pubmed", "doi": "10.64898/2026.09.18.1"}, strategy)
+    # Scopus could only narrow to the year, so the exact start date is applied to cover dates...
+    assert not _passes_filters({"source": "scopus", "publication_date": "2026-03-01"}, strategy)
+    assert _passes_filters({"source": "scopus", "publication_date": "2027-01-01"}, strategy)
+    # ...but PubMed's own date filter is trusted, whatever date the record reports.
+    assert _passes_filters({"source": "pubmed", "publication_date": "2026-03-01"}, strategy)

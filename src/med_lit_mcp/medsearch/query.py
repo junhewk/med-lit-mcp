@@ -79,7 +79,7 @@ def _date_clause(question: Question) -> str | None:
     return f'"{earliest}"[Date - Publication] : "{latest}"[Date - Publication]'
 
 
-def _append_pubmed_filters(query: str, question: Question) -> str:
+def _append_pubmed_filters(query: str, question: Question, *, database: str = "pubmed") -> str:
     filters: list[str] = []
     date_clause = _date_clause(question)
     if date_clause:
@@ -104,7 +104,11 @@ def _append_pubmed_filters(query: str, question: Question) -> str:
                 ]
             )
         )
-    return " AND ".join([query, *[part for part in filters if part]])
+    combined = " AND ".join([query, *[part for part in filters if part]])
+    if question.filters.exclude_preprints:
+        # In PMC, preprint[pt] also matches ordinary journal articles; preprint[filter] does not.
+        combined += " NOT preprint[pt]" if database == "pubmed" else " NOT preprint[filter]"
+    return combined
 
 
 def _boolean_queries(
@@ -164,6 +168,14 @@ def _degradation(feature: str, reason: str, fallback: str) -> QueryDegradation:
     return QueryDegradation(feature=feature, reason=reason, fallback=fallback)
 
 
+def _preprint_degradation(name: str) -> QueryDegradation:
+    return _degradation(
+        "preprint_filter",
+        f"{name} search does not expose a preprint filter.",
+        "Preprints are recognised by venue, DOI prefix and publication type and filtered out.",
+    )
+
+
 def compile_strategy(
     question: Question,
     *,
@@ -189,10 +201,13 @@ def compile_strategy(
     if invalid_variants:
         raise ValidationError("invalid source variants: " + ", ".join(invalid_variants))
 
-    pubmed, pubmed_precision = _boolean_queries(question, _pubmed_group)
-    pubmed = _append_pubmed_filters(pubmed, question)
-    if pubmed_precision:
-        pubmed_precision = _append_pubmed_filters(pubmed_precision, question)
+    ncbi, ncbi_precision = _boolean_queries(question, _pubmed_group)
+    pubmed = _append_pubmed_filters(ncbi, question)
+    pubmed_precision = _append_pubmed_filters(ncbi_precision, question) if ncbi_precision else None
+    pmc = _append_pubmed_filters(ncbi, question, database="pmc")
+    pmc_precision = (
+        _append_pubmed_filters(ncbi_precision, question, database="pmc") if ncbi_precision else None
+    )
     free_text, free_text_precision = _boolean_queries(question, _free_text_group)
     s2_bulk, s2_bulk_precision = _boolean_queries(
         question, _s2_group, joiner=" + "
@@ -212,11 +227,11 @@ def compile_strategy(
             request_parameters={"db": "pubmed", "term": active, "retmode": "json"},
         )
     if "pmc" in sources:
-        variant, active = _selected("pmc", pubmed, pubmed_precision, selected_variants)
+        variant, active = _selected("pmc", pmc, pmc_precision, selected_variants)
         strategies["pmc"] = SourceStrategy(
             source="pmc",
-            query=pubmed,
-            precision_query=pubmed_precision,
+            query=pmc,
+            precision_query=pmc_precision,
             selected_variant=variant,
             request_parameters={"db": "pmc", "term": active, "retmode": "json"},
             warnings=["PMC is queried directly; this is not Europe PMC."],
@@ -235,6 +250,8 @@ def compile_strategy(
             date_filters.append(
                 "language:" + "|".join(language_code(value) for value in question.filters.languages)
             )
+        if question.filters.exclude_preprints:
+            date_filters.append("type:!preprint")
         if date_filters:
             parameters["filter"] = ",".join(date_filters)
         strategies["openalex"] = SourceStrategy(
@@ -268,9 +285,10 @@ def compile_strategy(
             "endpoint": "bulk" if use_bulk else "relevance",
         }
         if question.filters.from_date or question.filters.to_date:
-            from_year = (question.filters.from_date or "").split("-")[0]
-            to_year = (question.filters.to_date or "").split("-")[0]
-            parameters["year"] = f"{from_year}-{to_year}"
+            # Day precision; either end may be open.
+            parameters["publicationDateOrYear"] = (
+                f"{question.filters.from_date or ''}:{question.filters.to_date or ''}"
+            )
         degradations = [
             _degradation(
                 "controlled_vocabulary",
@@ -296,14 +314,8 @@ def compile_strategy(
                     "Canonical text from every selected group is submitted without Boolean syntax.",
                 )
             )
-        if question.filters.from_date or question.filters.to_date:
-            degradations.append(
-                _degradation(
-                    "date_precision",
-                    "Semantic Scholar filters publication dates at year precision.",
-                    "ISO date bounds are reduced to inclusive years.",
-                )
-            )
+        if question.filters.exclude_preprints:
+            degradations.append(_preprint_degradation("Semantic Scholar"))
         if question.filters.languages:
             degradations.append(
                 _degradation(
@@ -338,6 +350,10 @@ def compile_strategy(
             year_parts.append(f"PUBYEAR AFT {int(question.filters.from_date[:4]) - 1}")
         if question.filters.to_date:
             year_parts.append(f"PUBYEAR BEF {int(question.filters.to_date[:4]) + 1}")
+        if question.filters.languages:
+            year_parts.append(
+                _or_group([f"LANGUAGE({language_name(value).lower()})" for value in question.filters.languages])
+            )
         if year_parts:
             suffix = " AND " + " AND ".join(year_parts)
             scopus_query += suffix
@@ -353,14 +369,16 @@ def compile_strategy(
                 "Resolved MeSH headings are submitted as free-text alternatives.",
             )
         ]
-        if question.filters.languages:
+        if question.filters.from_date or question.filters.to_date:
             degradations.append(
                 _degradation(
-                    "language_filter",
-                    "This CLI does not compile Scopus language clauses.",
-                    "Returned language metadata is filtered when available.",
+                    "date_precision",
+                    "Scopus filters publication dates at year precision.",
+                    "Whole years are searched and records are then filtered by cover date.",
                 )
             )
+        if question.filters.exclude_preprints:
+            degradations.append(_preprint_degradation("Scopus"))
         if question.filters.publication_types:
             degradations.append(
                 _degradation(
@@ -374,7 +392,7 @@ def compile_strategy(
             query=scopus_query,
             precision_query=scopus_precision_query,
             selected_variant=variant,
-            request_parameters={"query": active, "view": "STANDARD"},
+            request_parameters={"query": active, "view": "COMPLETE"},
             degradations=degradations,
         )
     warnings = [

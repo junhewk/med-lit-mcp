@@ -21,11 +21,6 @@ from .store import atomic_text
 SETTINGS_FILE = "med-lit.settings.json"
 SETTINGS_VERSION = 1
 YEARS = re.compile(r"^(?:all|(\d{4})-(\d{4})?)$")
-PREPRINT_SERVERS = (
-    "medrxiv", "biorxiv", "arxiv", "research square", "ssrn", "preprints.org", "chemrxiv",
-    "psyarxiv", "osf preprints", "jmir preprints", "authorea", "techrxiv", "sciety",
-)
-PREPRINT_DOI_PREFIXES = ("10.1101/", "10.48550/", "10.21203/", "10.2139/", "10.20944/", "10.31219/", "10.36227/")
 
 
 class Section(BaseModel):
@@ -199,16 +194,3 @@ def year_filters(years: str | None) -> dict[str, str]:
         filters["to_date"] = f"{end}-12-31"
     return filters
 
-
-def is_preprint(record: dict[str, Any]) -> bool:
-    """Best-effort preprint detection from publication type, venue, DOI and source id."""
-    types = " ".join(str(t).lower() for t in record.get("publication_types") or [])
-    if "preprint" in types or "posted-content" in types:
-        return True
-    venue = str(record.get("journal") or "").lower()
-    if any(server in venue for server in PREPRINT_SERVERS):
-        return True
-    doi = str(record.get("doi") or "").lower().removeprefix("https://doi.org/")
-    if doi.startswith(PREPRINT_DOI_PREFIXES):
-        return True
-    return str(record.get("source_id") or "").upper().startswith("PPR")

@@ -10,6 +10,7 @@ from mcp.shared.memory import create_connected_server_and_client_session
 from test_search import FakeProcess, write_results
 
 from med_lit_mcp import fetch, projects, search, settings, wiki
+from med_lit_mcp.medsearch.preprints import is_preprint
 from med_lit_mcp.projects import run_dir
 from med_lit_mcp.server import mcp
 from med_lit_mcp.store import RUN_FILE, atomic_json, read_json
@@ -51,11 +52,12 @@ class SettingsFileTests(Case):
         self.assertEqual(settings.year_filters(None), {})
 
     def test_preprint_detection(self) -> None:
-        self.assertTrue(settings.is_preprint({"publication_types": ["preprint"]}))
-        self.assertTrue(settings.is_preprint({"journal": "medRxiv"}))
-        self.assertTrue(settings.is_preprint({"doi": "10.1101/2026.01.01.123"}))
-        self.assertTrue(settings.is_preprint({"source_id": "PPR1328732"}))
-        self.assertFalse(settings.is_preprint({"journal": "JAMA", "doi": "10.1001/jama.2026.1", "publication_types": ["Journal Article"]}))
+        self.assertTrue(is_preprint({"publication_types": ["preprint"]}))
+        self.assertTrue(is_preprint({"journal": "medRxiv"}))
+        self.assertTrue(is_preprint({"doi": "10.1101/2026.01.01.123"}))
+        self.assertTrue(is_preprint({"doi": "10.64898/2026.09.18.26363419"}))
+        self.assertTrue(is_preprint({"source_id": "PPR1328732"}))
+        self.assertFalse(is_preprint({"journal": "JAMA", "doi": "10.1001/jama.2026.1", "publication_types": ["Journal Article"]}))
 
 
 class SettingsAppliedTests(Case):
@@ -68,7 +70,10 @@ class SettingsAppliedTests(Case):
             ),
         )
         checked = search.validate_question(QUESTION, None, self.project)
-        self.assertEqual(checked["normalized_question"]["filters"], {"from_date": "2015-01-01", "languages": ["english"]})
+        self.assertEqual(
+            checked["normalized_question"]["filters"],
+            {"from_date": "2015-01-01", "languages": ["english"], "exclude_preprints": True},
+        )
         self.assertEqual(checked["settings"]["per_source"], 7)
         self.assertFalse(any("three-year default" in w for w in checked["warnings"]))
         dated = {**QUESTION, "filters": {"from_date": "2022-06-01"}}
@@ -95,7 +100,10 @@ class SettingsAppliedTests(Case):
         )
         with patch.object(search.subprocess, "Popen", side_effect=launch):
             allowed = search.start_search(self.project, QUESTION, ["pubmed"], wait_seconds=0)
-        self.assertEqual(allowed["candidates"], 3)
+        # The preprints are new to the project; record 1 was found by the first search.
+        self.assertEqual((allowed["candidates"], allowed["already_known"]), (2, 1))
+        question = read_json(run_dir(allowed["run_id"]) / "question.json")
+        self.assertNotIn("exclude_preprints", question["filters"])
 
     def test_fetch_follows_ranking_and_skips_beyond_the_limit(self) -> None:
         run_id = self.make_run([record(n) for n in range(1, 5)])

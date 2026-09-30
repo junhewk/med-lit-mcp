@@ -124,6 +124,14 @@ def _strings(value: Any, field_name: str) -> list[str]:
     return result
 
 
+def _bool(value: Any, field_name: str) -> bool:
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise ValidationError(f"{field_name} must be true or false")
+    return value
+
+
 def _date(value: Any, field_name: str) -> str | None:
     if value in (None, ""):
         return None
@@ -216,6 +224,7 @@ class SearchFilters:
     to_date: str | None = None
     languages: list[str] = field(default_factory=list)
     publication_types: list[str] = field(default_factory=list)
+    exclude_preprints: bool = False
 
     @classmethod
     def from_dict(cls, data: Any) -> SearchFilters:
@@ -230,6 +239,7 @@ class SearchFilters:
             publication_types=_strings(
                 data.get("publication_types"), "filters.publication_types"
             ),
+            exclude_preprints=_bool(data.get("exclude_preprints"), "filters.exclude_preprints"),
         )
         if result.from_date and result.to_date and result.from_date > result.to_date:
             raise ValidationError("filters.from_date must not be after filters.to_date")

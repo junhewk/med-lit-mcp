@@ -302,7 +302,23 @@ class SemanticScholarProvider(Provider):
 
 class ScopusProvider(Provider):
     source = "scopus"
-    page_size = 25
+    page_size = 25  # the COMPLETE view's maximum
+    fallback_view: str | None = None
+
+    async def _search(self, strategy: SourceStrategy, **params: Any) -> dict[str, Any]:
+        """COMPLETE carries abstracts and all authors but needs a subscribing institution;
+        without that entitlement Elsevier answers 401/403 and STANDARD is used instead."""
+        view = self.fallback_view or strategy.request_parameters.get("view", "STANDARD")
+        query = {"query": strategy.selected_query, "view": view, **params}
+        try:
+            return await self.session.json(self.source, SCOPUS_URL, params=query, headers=self._headers())
+        except SourceError as exc:
+            if view == "STANDARD" or not re.search(r"HTTP 40[13]\b", str(exc)):
+                raise
+            self.fallback_view = "STANDARD"
+            return await self.session.json(
+                self.source, SCOPUS_URL, params=query | {"view": "STANDARD"}, headers=self._headers()
+            )
 
     def _headers(self) -> dict[str, str]:
         if not self.credentials.scopus_api_key:
@@ -313,12 +329,7 @@ class ScopusProvider(Provider):
         return headers
 
     async def count(self, strategy: SourceStrategy) -> int:
-        data = await self.session.json(
-            self.source,
-            SCOPUS_URL,
-            params={"query": strategy.selected_query, "count": 1, "start": 0, "view": "STANDARD"},
-            headers=self._headers(),
-        )
+        data = await self._search(strategy, count=1, start=0)
         try:
             return int((data.get("search-results") or {})["opensearch:totalResults"])
         except (KeyError, TypeError, ValueError) as exc:
@@ -333,17 +344,7 @@ class ScopusProvider(Provider):
             # short of the reported total, which the manifest already records as `truncated`.
             return Page(records=[], next_cursor=None, total=None)
         count = min(page_size, self.page_size, SCOPUS_MAX_START - start)
-        data = await self.session.json(
-            self.source,
-            SCOPUS_URL,
-            params={
-                "query": strategy.selected_query,
-                "count": count,
-                "start": start,
-                "view": "STANDARD",
-            },
-            headers=self._headers(),
-        )
+        data = await self._search(strategy, count=count, start=start)
         result = data.get("search-results") or {}
         try:
             total = int(result.get("opensearch:totalResults", 0))
@@ -373,17 +374,22 @@ class ScopusProvider(Provider):
             None,
         )
         identifier = str(item.get("dc:identifier") or item.get("eid") or "")
+        authors = [
+            str(author.get("authname"))
+            for author in item.get("author") or []
+            if isinstance(author, dict) and author.get("authname")
+        ] or ([str(item.get("dc:creator"))] if item.get("dc:creator") else [])
         return {
             "source": "scopus",
             "source_id": identifier.removeprefix("SCOPUS_ID:"),
             "title": item.get("dc:title") or "",
             "abstract": item.get("dc:description"),
-            "authors": [str(item.get("dc:creator"))] if item.get("dc:creator") else [],
+            "authors": authors,
             "journal": item.get("prism:publicationName"),
             "publication_date": item.get("prism:coverDate"),
             "year": str(item.get("prism:coverDate", ""))[:4] or None,
             "doi": normalize_external_id(item.get("prism:doi"), "doi"),
-            "pmid": None,
+            "pmid": str(item["pubmed-id"]) if item.get("pubmed-id") else None,
             "pmcid": None,
             "citation_count": int(item.get("citedby-count") or 0),
             "url": url,

@@ -37,7 +37,7 @@ QUESTION = {
 
 
 def record(number: int, **fields: Any) -> dict[str, Any]:
-    return {**RECORD, "source_id": str(number), "pmid": str(number), **fields}
+    return {**RECORD, "source_id": str(number), "pmid": str(number), "doi": f"10.1/example.{number}", **fields}
 
 
 class Case(unittest.TestCase):
