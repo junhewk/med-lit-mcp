@@ -16,6 +16,16 @@ NCBI_EMAIL=you@example.org uvx med-lit-mcp --check
 
 To try the latest unreleased code instead, replace `med-lit-mcp` with `--from git+https://github.com/junhewk/med-lit-mcp med-lit-mcp` in any command below.
 
+### Claude Desktop (no command line)
+
+1. Download `med-lit-<version>.mcpb` from the [latest release](https://github.com/junhewk/med-lit-mcp/releases/latest).
+2. In Claude Desktop open **Settings → Extensions → Advanced settings → Install Extension…** and choose the file.
+3. Fill in the form: your email address (needed for PubMed and Unpaywall), optionally a folder for your reviews (default `~/med-lit`) and any API keys. Keys are stored in the macOS Keychain or Windows Credential Manager.
+4. **Switch the extension on.** Its switch shows "Disabled" until you turn it on.
+5. In a chat, ask Claude to start a new review.
+
+Claude Desktop installs Python and the server's dependencies itself. To change a setting or add a key later, open the extension in **Settings → Extensions**.
+
 ### Hermes
 
 ```bash
@@ -35,9 +45,9 @@ claude mcp add med-lit --scope user -e NCBI_EMAIL=you@example.org -- \
   uvx med-lit-mcp
 ```
 
-### Claude Desktop
+### Claude Desktop (manual configuration)
 
-Add the server to `claude_desktop_config.json`: `~/Library/Application Support/Claude/` on macOS, `~/.config/Claude/` on Linux. Desktop starts servers with a minimal `PATH`, so use the absolute path printed by `which uvx`.
+Instead of the extension, you can add the server to `claude_desktop_config.json`: `~/Library/Application Support/Claude/` on macOS, `~/.config/Claude/` on Linux. Desktop starts servers with a minimal `PATH`, so use the absolute path printed by `which uvx`.
 
 ```json
 {

@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .config import projects_dir, state_dir
+from .config import projects_dir, state_dir, user_path
 from .ontology import ONTOLOGY_VERSION
 from .store import RUN_FILE, RUN_ID, atomic_json, file_lock, now, read_json
 
@@ -87,7 +87,7 @@ def create_project(name: str, path: str | None = None) -> Project:
     name = " ".join(name.split())
     if not name:
         raise ValueError("Give the project a name, e.g. the review topic")
-    root = Path(path).expanduser() if path else projects_dir() / _folder_name(name)
+    root = user_path(path, projects_dir()) if path else projects_dir() / _folder_name(name)
     root = root.resolve()
     if (root / WORK / "project.json").exists():
         raise ValueError(f"{root} is already a project; use open_project")
@@ -111,7 +111,7 @@ def create_project(name: str, path: str | None = None) -> Project:
 
 
 def open_project(path: str) -> Project:
-    root = Path(path).expanduser().resolve()
+    root = user_path(path, projects_dir()).resolve()
     identity = _read_identity(root)
     project = Project(id=identity["id"], name=identity["name"], root=root)
     with _registry() as entries:
