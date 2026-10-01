@@ -72,7 +72,7 @@ Instead of the extension, you can add the server to `claude_desktop_config.json`
 
 ### Updating
 
-`uvx` caches the installed version. To pick up a new release, run `uvx med-lit-mcp@latest --check` once, then restart the client (in Hermes, `/reload-mcp`). Bots use the same cached version from their next run.
+`uvx` caches the installed version. To pick up a new release, run `uvx med-lit-mcp@latest --check` once, then restart the client (in Hermes, `/reload-mcp`). Bots use the same cached version from their next run. After an update, open each bot once with `uvx med-lit-mcp setup bot --edit "<name>"` (then choose done): this refreshes its scheduled job's instructions to the new version.
 
 ## Settings
 
@@ -213,7 +213,7 @@ To run a bot now instead of waiting for its time, answer yes to setup's last que
 **Each run:**
 - searches articles published in the look-back window (90 days by default, open-ended because journals date issues ahead) and takes in only articles new to the project: at most `max_new_articles`, best-ranked first. Articles over the cap are not marked as seen, so later runs pick them up while they are still in the window;
 - screens them against the frozen criteria, fetches and extracts the included ones, and writes every entity page these articles make due (entities with at least `wiki.min_sources` source articles): new pages first, then updates with the new evidence. A run's size is therefore set by `max_new_articles`;
-- finishes all the work its articles bring, however long it takes. Two runs of the same bot never overlap; if a run is interrupted, the next one continues its unfinished work;
+- finishes all the work its articles bring, however long it takes. Two runs of the same bot never overlap. If a run stops before finishing (the agent ends early, or the machine sleeps), the next run continues its unfinished work and its report includes the stopped run's articles, decisions and pages;
 - excludes articles with no DOI, PMID or PMCID and lists them in the report; ask for one in a normal chat to add it;
 - writes a report to `updates/<date>.md` in the project folder and replies with the same text, which Hermes saves under `~/.hermes/profiles/medlitbot/cron/output/<job id>/`. A run that found nothing stays silent and writes no report.
 
@@ -243,6 +243,9 @@ Every question and criteria version is kept in `.med-lit/bot.json`. A normal cha
 Set your own defaults for new bots under `"bot"` in `defaults.json` (see [Review settings](#review-settings)).
 
 Notes:
+- The agent is handed one step at a time: a screening batch, a fetch, or a single wiki task to give to a subagent. A wiki task that comes back three times without progress ends the run instead of looping. The job's instructions tell the agent to mark a run as failed in Hermes when it cannot go on.
+- Scheduled jobs need a Hermes build from 28 September 2026 or later. On older builds every scheduled job fails at start (`No module named 'ruamel'`, visible in `hermes -p medlitbot cron runs`); run `hermes update` and `hermes gateway restart`.
+- Report names and the look-back window use the machine's local date.
 - The bot uses the `medlitbot` profile's model; change it with `hermes -p medlitbot model`. Jobs fire while the Hermes gateway runs (`hermes -p medlitbot cron status`); list past runs with `hermes -p medlitbot cron runs <job id>`.
 - An [OpenAlex key](https://openalex.org/settings/api) is worth adding for bots: without one, OpenAlex may refuse searches when it is busy.
 - Europe PMC cannot be searched by a bot.
