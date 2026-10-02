@@ -61,3 +61,27 @@ An entity merges automatically only on an equal name key, an alias, an acronym d
 ## Markdown export
 
 Each entity page's front matter carries `entity_type` (the med-lit type), `sgb_type` (its Simple Graph Builder parent), `aliases`, and `ontology: med-lit/1`. Page files are named after the entity (`entities/<Name>.md`); the stable identifier is `entity_id` in the front matter. Relationships are listed as `- verb [Entity](link)` lines with their evidence, the same shape Simple Graph Builder writes into its entity notes.
+
+## Graph export
+
+Every markdown export also writes the graph as JSON to `.med-lit/sgb-export.json`, for importers such as Simple Graph Builder that should not read the database. It is written in the same step and from the same database transaction as the pages, after them and before stale pages are removed, so every page it names is on disk. Both the full export (`export_wiki`, which also ends every bot run) and the incremental export after each entity page is written produce it; the incremental export first writes pages for entities and articles that do not have one yet. The file is replaced atomically (a temporary file in `.med-lit/`, then a rename), and it is not rewritten when nothing but `generated_at` would change. Keys are sorted and lists are ordered by id or uid, so equal data gives an equal file.
+
+Format `med-lit-sgb/1`:
+
+| Field | Content |
+|---|---|
+| `format` | `"med-lit-sgb/1"` |
+| `generator` | `"med-lit-mcp <version>"` |
+| `generated_at` | When the file was written (ISO 8601, UTC) |
+| `project` | `id` and `name` from `.med-lit/project.json`, and `ontology` (`"med-lit/1"`) |
+| `data_updated_at` | The latest of the articles' and entities' `updated_at`, syntheses' `compiled_at` and merges' `merged_at`; `null` for an empty graph |
+| `bot_update` | The newest bot update whose work the export may include: the running update during a bot run, otherwise the last run's. If it is newer than the last finished entry in `.med-lit/bot.json`'s `history`, that run did not finish. `null` for a project without a bot |
+| `entities` | By `id`: `id`, `name`, `type` (the med-lit type), `sgb_type` (its Simple Graph Builder parent), `description`, `aliases` (`[{alias, source}]`, every alias except the canonical name; `source` is `canonical`, `mention`, `acronym`, `merge` or `agent`), `page` |
+| `articles` | By `uid`: `uid`, `title`, `doi`, `published`, `content_type` (`full_text` or `abstract_only`), `page` |
+| `mentions` | One per distinct article, entity and role: `article` (uid), `entity` (id), `role` (or `null`) |
+| `relationships` | By `id`: `id`, `source` and `target` (entity ids), `verb`, `detail` (or `null`), `evidence` (`[{article, quote}]`, one per evidence record, ordered by article and page, quotes verbatim) |
+| `merges` | The merge log by its order: `kept` and `merged` (entity ids; the merged id no longer exists), `name` (the merged entity's name), `merged_at` |
+
+`page` is the file the markdown export wrote for that row, relative to the project folder and `/`-separated (`entities/<Name>.md`, `sources/<Name>.md`). It is `null` only when no generated page exists, for example when a file of the researcher's own occupies that name. The export mirrors the pages: articles withdrawn from the review and entities removed from the graph are left out, and so are full texts, abstracts, synthesis texts and screening data.
+
+`format` changes its major version only for breaking changes. Version 1 may gain new optional fields, so readers should ignore fields they do not know.
