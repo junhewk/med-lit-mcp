@@ -131,6 +131,18 @@ class SettingsAppliedTests(Case):
         plan = wiki.work_plan(run_id)
         self.assertIn("at most 5 tasks", plan["how"])
 
+    def test_wiki_plan_previews_page_limit_and_respects_reader_override(self) -> None:
+        run_id = self.make_run()
+        self.add_text(run_id, "pubmed:123", "\n\n".join("word " * 2400 for _ in range(10)))
+        settings.write_settings(
+            self.project.root,
+            settings.apply_changes(settings.load_settings(self.project.root), {"wiki.max_pages": 1}),
+        )
+        self.assertIn("1 page(s) left", wiki.work_plan(run_id)["tasks"][0])
+        self.assertEqual(wiki.next_article(run_id)["header"]["page_count"], 1)
+        self.assertEqual(wiki.next_article(run_id, max_pages=2)["header"]["page_count"], 2)
+        self.assertIn("2 page(s) left", wiki.work_plan(run_id)["tasks"][0])
+
 
 class SettingsToolTests(Case, unittest.IsolatedAsyncioTestCase):
     async def test_project_settings_tool_shows_changes_and_protects_bots(self) -> None:

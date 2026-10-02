@@ -9,13 +9,33 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.2.0
       - name: Run tests
         run: uv run pytest
+      - name: Check Windows bootstrap syntax
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $parseErrors = $null
+          $tokens = $null
+          [System.Management.Automation.Language.Parser]::ParseInput(
+            (Get-Content -Raw "$PWD/installers/windows-bootstrap.ps1").Replace('@VERSION@', '0.0.0'),
+            [ref]$tokens, [ref]$parseErrors
+          ) | Out-Null
+          if ($parseErrors.Count) { $parseErrors | Write-Error; exit 1 }
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
       - name: Check the release tag matches the package version
         if: github.event_name == 'release'
         run: |
@@ -46,7 +66,7 @@ jobs:
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
 
-  desktop-extension:
+  desktop-installers:
     needs: publish
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
@@ -57,8 +77,11 @@ jobs:
       - uses: astral-sh/setup-uv@v10.2.0
       - name: Build the Claude Desktop extension
         run: uv run python scripts/build_mcpb.py dist-extension
-      - name: Attach it to the release
+      # macOS releases use build_macos_installer.py on the signing Mac's Keychain.
+      # Its notarized DMG and SHA256SUMS-macos are attached separately after validation.
+      - name: Build the Windows ChatGPT local installer
+        run: uv run python scripts/build_windows_installer.py dist-installers
+      - name: Attach desktop installers to the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${GITHUB_REF_NAME}" dist-extension/*.mcpb --clobber
-
+        run: gh release upload "${GITHUB_REF_NAME}" dist-extension/*.mcpb dist-installers/*.bat dist-installers/SHA256SUMS --clobber

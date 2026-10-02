@@ -218,7 +218,7 @@ class WikiTests(Case):
         )
         self.assertEqual(saved["version"], 1)
         self.assertIn("unknown thing", saved["warnings"][0])
-        page = Path(saved["page"]).read_text()
+        page = Path(saved["page"]).read_text(encoding="utf-8")
         self.assertTrue(page.startswith("---\ngenerator: med-lit-mcp\n"))
         self.assertEqual(Path(saved["page"]), self.project.root / "entities" / "large language model.md")
         self.assertIn("[pubmed:1](../sources/Researcher%202026%20-%20Oncology%20SDM.md)", page)
@@ -227,7 +227,7 @@ class WikiTests(Case):
         self.assertEqual(wiki.next_synthesis(self.project, self.run_id)["done"], True)
         status = read_json(run_dir(self.run_id) / RUN_FILE)["articles"]
         self.assertEqual({item["wiki"] for item in status.values()}, {"complete"})
-        self.assertIn("Oncology SDM", (wiki_root / "log.md").read_text())
+        self.assertIn("Oncology SDM", (wiki_root / "log.md").read_text(encoding="utf-8"))
         # New evidence marks the synthesis stale and queues it again.
         self.extract("pubmed:1", [entity("large language model", "LLM output")])
         self.assertEqual(wiki.next_synthesis(self.project, self.run_id)["name"], "large language model")
@@ -247,7 +247,7 @@ class WikiTests(Case):
         self.assertEqual(context["mentions"][0]["role"], "intervention")
         wiki_export.export_wiki(self.project)
         root = self.project.root
-        page = (root / "entities" / "large language model.md").read_text()
+        page = (root / "entities" / "large language model.md").read_text(encoding="utf-8")
         self.assertIn('sgb_type: "TOOL"', page)
         self.assertIn('ontology: "med-lit/1"', page)
         self.assertIn("## Relationships", page)
@@ -256,10 +256,10 @@ class WikiTests(Case):
             page,
         )
         self.assertIn("(as intervention)", page)
-        target = (root / "entities" / "shared decision-making.md").read_text()
+        target = (root / "entities" / "shared decision-making.md").read_text(encoding="utf-8")
         self.assertIn('aliases: ["SDM"]', target)
         self.assertRegex(target, r"- \[large language model\]\(.*\) supports this")
-        source = (root / "sources" / "Researcher 2026 - Oncology SDM.md").read_text()
+        source = (root / "sources" / "Researcher 2026 - Oncology SDM.md").read_text(encoding="utf-8")
         self.assertIn("· TECHNOLOGY · intervention", source)
 
     def test_duplicates_are_proposed_across_types_with_the_same_parent(self) -> None:
@@ -279,11 +279,11 @@ class WikiTests(Case):
         result = wiki_export.export_wiki(self.project)
         self.assertEqual((result["entity_pages"], result["source_pages"], result["removed_files"]), (1, 2, 1))
         self.assertTrue((root / "entities" / "my-notes.md").exists())
-        self.assertEqual((root / "index.md").read_text(), "# My own index")
+        self.assertEqual((root / "index.md").read_text(encoding="utf-8"), "# My own index")
         self.assertEqual(result["not_overwritten"], ["index.md"])
-        source = (root / "sources" / "Researcher 2026 - Cardiology aids.md").read_text()
+        source = (root / "sources" / "Researcher 2026 - Cardiology aids.md").read_text(encoding="utf-8")
         self.assertIn("Only the abstract was available", source)
-        self.assertIn("No synthesis yet", (root / "entities" / "chatbot.md").read_text())
+        self.assertIn("No synthesis yet", (root / "entities" / "chatbot.md").read_text(encoding="utf-8"))
         self.assertFalse(any(path.parts[-2] == ".med-lit" for path in root.rglob("*.md")))
         # Orphaned entities disappear once their only page is re-recorded without them.
         self.extract("pubmed:1", [])

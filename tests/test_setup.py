@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import unittest
 from pathlib import Path
 from unittest.mock import patch
 
@@ -25,8 +26,9 @@ class KeyStoreTests(Case):
     def test_store_is_private_and_the_environment_wins(self) -> None:
         scopus = keys.BY_NAME["scopus"]
         path = keys.set_key(scopus, "  scopus-secret-1234 ")
-        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
-        self.assertEqual(stat.S_IMODE(path.parent.stat().st_mode), 0o700)
+        if os.name != "nt":
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+            self.assertEqual(stat.S_IMODE(path.parent.stat().st_mode), 0o700)
         self.assertEqual(json.loads(path.read_text()), {"SCOPUS_API_KEY": "scopus-secret-1234"})
         keys.write_config({"NCBI_EMAIL": "stored@example.org", "MED_LIT_PROJECTS_DIR": "/data/reviews"})
         with patch.dict(os.environ, {"NCBI_EMAIL": "client@example.org"}):
@@ -70,6 +72,7 @@ class SetupTests(Case):
             script.chmod(0o755)
         return bin_dir
 
+    @unittest.skipIf(os.name == "nt", "Hermes and Claude fake executables use a Unix shell")
     def test_unattended_setup_saves_settings_and_registers_every_client(self) -> None:
         bin_dir = self.fake_clients()
         with patch.dict(os.environ, {"PATH": f"{bin_dir}:{os.environ['PATH']}"}):

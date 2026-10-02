@@ -1,4 +1,4 @@
-"""`med-lit-mcp setup` and `med-lit-mcp keys`: terminal setup for Hermes and Claude Code users."""
+"""Terminal setup for agent clients, with a settings UI for ChatGPT desktop."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from . import keys, settings
+from . import clients, keys, settings
 from .config import projects_dir, user_path
 
 SERVER_NAME = "med-lit"
@@ -130,6 +130,10 @@ def ask_defaults(console: Console) -> None:
 
 
 def setup(args: argparse.Namespace, console: Console) -> int:
+    if args.ui:
+        from .setup_ui import main as ui_main
+
+        return ui_main(args)
     keys.load_into_environ()
     print("med-lit-mcp setup. Settings go to", keys.config_dir())
     email = args.email or console.text("Contact email for PubMed and Unpaywall", os.environ.get("NCBI_EMAIL", ""))
@@ -154,23 +158,33 @@ def setup(args: argparse.Namespace, console: Console) -> int:
     if args.no_register:
         print("\nSaved. Skipped client registration (--no-register).")
         return 0
-    clients = {"hermes": shutil.which("hermes"), "claude-code": shutil.which("claude")}
-    wanted = args.client or [name for name, path in clients.items() if path]
+    found = {"hermes": shutil.which("hermes"), "claude-code": shutil.which("claude"), "codex": shutil.which("codex")}
+    wanted = args.client or [name for name, path in found.items() if path]
     command = server_command(args.dev)
     print()
     if not wanted:
-        print("No Hermes or Claude Code found. Register the server yourself with:", " ".join(command))
+        print("No Hermes, Claude Code or Codex found. Register the server yourself with:", " ".join(command))
+    failed = False
     for name in wanted:
-        path = clients.get(name)
+        path = found.get(name)
         if not path:
             print(f"- {name}: not found on this machine")
+            failed = True
             continue
         if not console.confirm(f"Register med-lit with {name}?"):
             continue
-        register = register_hermes if name == "hermes" else register_claude_code
-        print(f"- {name}: {register(path, command, console)}")
+        if name == "codex":
+            try:
+                message = clients.register_codex(command)
+            except clients.RegistrationConflict as exc:
+                message = clients.register_codex(command, replace=True) if console.confirm(str(exc)) else "kept the existing Codex registration"
+        else:
+            register = register_hermes if name == "hermes" else register_claude_code
+            message = register(path, command, console)
+        failed |= "failed" in message
+        print(f"- {name}: {message}")
     print("\nDone. Ask your agent: \"Start a new review on …\". Manage keys later with: uvx med-lit-mcp keys")
-    return 0
+    return 1 if failed else 0
 
 
 def keys_command(args: argparse.Namespace, console: Console) -> int:
@@ -236,21 +250,37 @@ def main(argv: list[str]) -> int:
         return bot_main(argv[2:])
     parser = argparse.ArgumentParser(prog="med-lit-mcp")
     commands = parser.add_subparsers(dest="command", required=True)
-    setup_parser = commands.add_parser("setup", help="Set your email, reviews folder and API keys, and register with Hermes/Claude Code")
+    setup_parser = commands.add_parser("setup", help="Set your email, folder and keys; register with Hermes, Claude Code or Codex")
     setup_parser.add_argument("--email")
     setup_parser.add_argument("--projects-dir")
-    setup_parser.add_argument("--client", action="append", choices=("hermes", "claude-code"),
+    setup_parser.add_argument("--client", action="append", choices=("hermes", "claude-code", "codex", "chatgpt"),
                               help="Register with this client (repeatable); default: every one found")
+    setup_parser.add_argument("--ui", action="store_true", help="Open the ChatGPT desktop settings form (no terminal prompts)")
+    setup_parser.add_argument("--launcher", help=argparse.SUPPRESS)  # Absolute uv path from the installer bootstrap.
+    source = setup_parser.add_mutually_exclusive_group()
+    source.add_argument("--package", help=argparse.SUPPRESS)  # Persistent bundled wheel from the signed installer.
     setup_parser.add_argument("--no-register", action="store_true", help="Only save settings and keys")
-    setup_parser.add_argument("--dev", metavar="CHECKOUT", help="Run the server from a source checkout (development)")
+    source.add_argument("--dev", metavar="CHECKOUT", help="Run the server from a source checkout (development)")
     setup_parser.add_argument("--yes", action="store_true", help="Accept defaults without asking (keys are skipped)")
     keys_parser = commands.add_parser("keys", help="Show, set, remove or test API keys")
     keys_parser.add_argument("action", nargs="?", choices=("list", "set", "remove", "test"))
     keys_parser.add_argument("name", nargs="?", help=", ".join(keys.BY_NAME))
     args = parser.parse_args(argv)
+    if args.command == "setup":
+        if args.ui and args.client not in (None, ["chatgpt"]):
+            parser.error("--ui supports only --client chatgpt")
+        if not args.ui and args.client and "chatgpt" in args.client:
+            parser.error("--client chatgpt needs --ui")
+        if args.launcher and not args.ui:
+            parser.error("--launcher needs --ui")
+        if args.package and not args.ui:
+            parser.error("--package needs --ui")
     console = Console(getattr(args, "yes", False))
     try:
         return setup(args, console) if args.command == "setup" else keys_command(args, console)
     except (KeyboardInterrupt, EOFError):
         print("\ncancelled", file=sys.stderr)
         return 130
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        print(f"Setup failed: {exc}", file=sys.stderr)
+        return 1

@@ -33,9 +33,9 @@ def ncbi_email(*, required: bool = False) -> str | None:
     value = os.environ.get("NCBI_EMAIL", "").strip() or None
     if required and not value:
         raise ValueError(
-            "NCBI_EMAIL is not set. Add it to this MCP server's environment "
-            "(hermes mcp add ... --env NCBI_EMAIL=you@example.org; "
-            "claude mcp add ... -e NCBI_EMAIL=you@example.org)"
+            "NCBI_EMAIL is not set. In Hermes, Claude Code or Codex, run `uvx med-lit-mcp setup` to set your contact email. "
+            "In ChatGPT desktop Work/Codex, reopen the med-lit installer. "
+            "Claude Desktop extension users can enter it in Settings → Extensions → med-lit."
         )
     return value
 

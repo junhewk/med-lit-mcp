@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 build/
 dist/
+dist-installers/
+dist-macos/
+dist-extension/
 *.egg-info/
 .venv/
 

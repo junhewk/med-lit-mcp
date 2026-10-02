@@ -6,7 +6,6 @@ import html
 import json
 import os
 import re
-import signal
 import subprocess
 import sys
 import time
@@ -23,6 +22,7 @@ from .medsearch.cli import _years_ago
 from .medsearch.models import Question, ValidationError
 from .medsearch.preprints import is_preprint
 from .projects import Project, new_run_dir, run_dir
+from .platforms import process_alive, stop_process_tree
 from .runs import summary
 from .settings import SearchSettings, load_settings, year_filters
 from .store import (
@@ -580,13 +580,7 @@ def _alive(run_id: str, pid: int | None) -> tuple[bool, int | None]:
         return code is None, code
     if not pid:
         return False, None
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False, None
-    except PermissionError:
-        return True, None
-    return True, None
+    return process_alive(pid), None
 
 
 def _stderr_tail(path: Path) -> str | None:
@@ -609,7 +603,7 @@ def poll(path: Path, manifest: dict[str, Any]) -> None:
         if (datetime.now(UTC) - started).total_seconds() <= SEARCH_TIMEOUT:
             return
         try:
-            os.killpg(manifest["search_pid"], signal.SIGTERM)
+            stop_process_tree(manifest["search_pid"])
         except (OSError, KeyError, TypeError):
             pass
         _ACTIVE.pop(run_id, None)

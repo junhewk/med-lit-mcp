@@ -13,6 +13,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import portalocker
+
 RUN_ID = re.compile(r"^[0-9a-f]{32}$")
 RUN_FILE = "run.json"
 MANIFEST_VERSION = 1
@@ -47,14 +49,13 @@ def atomic_text(path: Path, value: str) -> None:
 
 @contextmanager
 def file_lock(path: Path) -> Iterator[None]:
-    try:
-        import fcntl
-    except ImportError as exc:  # pragma: no cover - Windows
-        raise ValueError("med-lit-mcp needs Linux or macOS (fcntl file locks)") from exc
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        yield
+        portalocker.lock(lock, portalocker.LOCK_EX)
+        try:
+            yield
+        finally:
+            portalocker.unlock(lock)
 
 
 @contextmanager

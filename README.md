@@ -4,7 +4,7 @@ med-lit-mcp is an MCP server for medical literature reviews. It takes a review t
 
 Your MCP client's model does the reading and writing (screening decisions, entity extraction, syntheses). med-lit-mcp searches the databases, stores everything, checks the model's work against the source text, and exports the wiki. Every screening decision, extracted mention and synthesis citation must be a verbatim quote or a reference to the stored text.
 
-It works with Hermes, Claude Code and Claude Desktop on Linux and macOS. It needs no embedding endpoint, no model API key and no build step. The only required setting is `NCBI_EMAIL`.
+It supports Hermes, Claude Code, Claude Desktop and native Codex MCP connections. ChatGPT desktop Work/Codex has a separate guided installation and settings UI for users who prefer no terminal typing. The server runs on Linux, macOS and Windows; see [compatibility](#compatibility-and-validation) for validation status. It needs no embedding endpoint, no model API key and no build step. The only required setting is a contact email (`NCBI_EMAIL`).
 
 With Hermes, a review can also be kept up to date by a **bot**: a scheduled job that re-runs a search you have tried, screens what is new and adds it to the wiki. See [Bots](#bots-keep-a-review-up-to-date-hermes).
 
@@ -12,13 +12,22 @@ With Hermes, a review can also be kept up to date by a **bot**: a scheduled job 
 
 med-lit-mcp is on [PyPI](https://pypi.org/project/med-lit-mcp/) and runs through [`uv`](https://docs.astral.sh/uv/) ([install uv](https://docs.astral.sh/uv/getting-started/installation/) first if you don't have it). Claude Desktop users can skip the terminal entirely with the extension below.
 
-### Hermes and Claude Code: `setup`
+| Client | Installation | Email, folder and keys |
+| --- | --- | --- |
+| Hermes, Claude Code, Codex | CLI `setup` | Terminal prompts |
+| Claude Desktop | `.mcpb` extension | Claude's settings form |
+| ChatGPT desktop Work/Codex on Windows x64 | `Install med-lit.bat` | Local browser form |
+| ChatGPT desktop Work/Codex on macOS | Signed, notarized `.dmg` | Local browser form |
+
+**This checkout is version 0.1.6, which is not yet published.** Native Codex setup and the ChatGPT installers described below belong to this version. For now, test them from a checkout using the [development instructions](#development). The matching installer assets will be available after release.
+
+### Hermes, Claude Code and Codex: CLI setup
 
 ```bash
 uvx med-lit-mcp setup
 ```
 
-Setup asks for your contact email (needed for PubMed and Unpaywall), a folder for your reviews (default `~/med-lit`), optionally API keys, and optionally your default [review settings](#review-settings). Each key is typed with hidden input, tested against its provider right away, and saved in `~/.config/med-lit-mcp/keys.json`, a file only you can read. Setup then registers med-lit with every Hermes and Claude Code it finds on the machine. Keys never go into the chat or into the clients' configuration files.
+Setup asks for your contact email (needed for PubMed and Unpaywall), a folder for your reviews (default `~/med-lit`), optionally API keys, and optionally your default [review settings](#review-settings). Each key is typed with hidden input, tested against its provider right away, and saved in `~/.config/med-lit-mcp/keys.json`, a file only you can read. Setup then registers med-lit with every Hermes, Claude Code and Codex CLI it finds on the machine. Keys never go into the chat or into the clients' configuration files. Codex users use these terminal prompts, just like Hermes users.
 
 Manage keys later without rerunning setup:
 
@@ -29,7 +38,33 @@ uvx med-lit-mcp keys test         # check every key against its provider
 uvx med-lit-mcp keys remove openalex
 ```
 
-For unattended use: `uvx med-lit-mcp setup --email you@example.org --yes` accepts the defaults, skips the key questions and registers with every client found; `--client hermes` or `--client claude-code` limits it to one.
+For unattended use: `uvx med-lit-mcp setup --email you@example.org --yes` accepts the defaults, skips the key questions and registers with every client found; `--client hermes`, `--client claude-code` or `--client codex` limits it to one. `--yes` also accepts replacing an existing registration.
+
+For Codex specifically:
+
+```bash
+uvx med-lit-mcp setup --client codex
+```
+
+Setup writes only the `med-lit` entry in `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`), preserving other settings and comments. It uses an absolute launcher path, a 180-second startup timeout and a 600-second tool timeout. An identical connection is kept; a different connection requires a replacement choice. Restart the client or start a new session, then use `/mcp` to check the connection. The ChatGPT desktop app and Codex CLI share this native configuration on the same host. [Official MCP documentation](https://learn.chatgpt.com/docs/extend/mcp)
+
+### ChatGPT desktop: download and open the installer
+
+This flow targets **desktop Work/Codex with local computer access** on macOS (Apple Silicon or Intel) and Windows x64. Hosted Chat and mobile do not run the local server. **The 0.1.6 launchers are prepared but not released; see the [validation status](docs/validation.md#release-gates).**
+
+After the matching installer assets are published:
+
+1. Download the installer from the [release page](https://github.com/junhewk/med-lit-mcp/releases/latest): **Windows:** `Install med-lit.bat`; **macOS:** `med-lit-macos-<version>.dmg`, then open the disk image and double-click **med-lit Installer**. Accept the normal macOS downloaded-app confirmation if shown.
+2. The installer finds or installs uv and Python, showing progress in a native window on Mac or a console window on Windows. Complete the browser form: your contact email, reviews folder (use **Choose folder…** or keep the suggested path), and optional database keys. No terminal commands are needed.
+3. Select **Save and connect**. Wait for **med-lit is ready**, which means the actual server connection passed verification. If it fails, the form offers **Retry connection**.
+4. Restart ChatGPT. Open **Work** with the reviews folder as a local project using **Choose project** or **File → Open Folder…**, and accept its normal folder trust prompt.
+5. Copy the message from the Ready page into ChatGPT, or ask: **“Start a med-lit review. Help me define the question, then wait for my approval before searching.”**
+
+Reopen the downloaded installer to change settings or repair the connection. Blank key fields keep saved keys; **Remove saved key** removes one. Keys stay in private local files and are entered in the browser form, never in a conversation. The form expires after 15 minutes of inactivity. Cancellation before Save changes no settings; a downloaded runtime may remain.
+
+A failed setup shows retry guidance. The Mac installer is a small native launcher signed with Developer ID and notarized by Apple. It includes the matching med-lit Python package, copies it into a persistent user runtime folder, and opens the same local browser form. No terminal typing, system Python, administrator access or copying into Applications is required. After setup you can eject the disk image; the registered server runs from the persistent runtime folder. Rerun a newer installer to update, preserving settings and reviews.
+
+The installer registers the same native MCP connection used by Codex. It needs neither a setup plugin nor the standalone Codex CLI. [Build instructions](docs/installation.md) and [validation](docs/validation.md).
 
 To try the latest unreleased code, replace `med-lit-mcp` with `--from git+https://github.com/junhewk/med-lit-mcp med-lit-mcp` in any command.
 
@@ -43,14 +78,17 @@ To try the latest unreleased code, replace `med-lit-mcp` with `--from git+https:
 
 Claude Desktop installs Python and the server's dependencies itself. To change a setting or add a key later, open the extension in **Settings → Extensions**.
 
-### Hermes or Claude Code, registered by hand
+### Hermes, Claude Code or Codex, registered by hand
 
 `setup` runs these for you. To register by hand, first save your settings without registering (`uvx med-lit-mcp setup --no-register`), then:
 
 ```bash
 hermes mcp add med-lit --command uvx --connect-timeout 180 --args med-lit-mcp
 claude mcp add med-lit --scope user -- uvx med-lit-mcp
+codex mcp add med-lit -- uvx med-lit-mcp
 ```
+
+For manual Codex registration, use the absolute path to `uvx` if the desktop app has a minimal `PATH`, and set `startup_timeout_sec = 180` and `tool_timeout_sec = 600` in `[mcp_servers.med-lit]`. Native `setup --client codex` does this for you.
 
 In Hermes, `--env` must come before `--args`, because `--args` takes everything after it. Hermes passes an MCP server only basics such as `PATH` and `HOME` plus the variables given with `--env`; med-lit reads its settings and keys from `~/.config/med-lit-mcp/`, so none need to be passed.
 
@@ -71,6 +109,8 @@ Instead of the extension, you can add the server to `claude_desktop_config.json`
 ```
 
 ### Updating
+
+ChatGPT desktop users reopen the installer to change settings or repair a connection, and download a newer installer to update med-lit. The Mac installer carries its matching package; the Windows launcher downloads its pinned package version from PyPI. Both preserve saved settings and reviews. A changed native registration asks for explicit replacement in the browser form.
 
 `uvx` caches the installed version. To pick up a new release, run `uvx med-lit-mcp@latest --check` once, then restart the client (in Hermes, `/reload-mcp`). Bots use the same cached version from their next run. After an update, open each bot once with `uvx med-lit-mcp setup bot --edit "<name>"` (then choose done): this refreshes its scheduled job's instructions to the new version.
 
@@ -328,11 +368,25 @@ npx @modelcontextprotocol/inspector uv run med-lit-mcp
 
 To run a server from a checkout, use `uv run --directory /path/to/med-lit-mcp med-lit-mcp` as the MCP command. Unlike `uvx --from <path>`, it always runs the checkout's current code. `setup --dev /path/to/med-lit-mcp` and `setup bot --dev /path/to/med-lit-mcp` register that command for you (run them with `uv run med-lit-mcp …` from the checkout).
 
-Windows is not supported (run locks use `fcntl`).
+To test the new setup flows from this checkout:
+
+```bash
+uv run med-lit-mcp setup --client codex --dev .
+uv run med-lit-mcp setup --ui --client chatgpt --dev .
+```
+
+For platform installer builds, signing and release steps, see [Installation and release](docs/installation.md). The generated Windows batch supports `--dev "C:\path\to\checkout"`. Production Mac builds carry the matching wheel and require Developer ID signing and Apple notarization.
+
+### Compatibility and validation
+
+Review locks, private credential storage and process recovery support Linux, macOS and Windows. The final 0.1.6 suites passed **220 tests on Linux, 221 on native macOS and 223 on native Windows**. CI tests all three operating systems.
+
+The signed Mac DMG passed Apple notarization, a quarantined Chrome download, normal Finder launch, browser Save/connect and actual MCP startup with 31 tools after eject. Windows passed native batch execution, fresh verified runtime installation and browser Save/connect in Edge. ChatGPT Work on Mac also completed search, screening, full-text fetch, extraction, synthesis and a cited wiki export.
+
+Guided setup targets macOS Apple Silicon/Intel and Windows x64. Intel execution and the public Windows download/PyPI flow remain release checks. The [validation record](docs/validation.md) distinguishes these checks from completed tests. Hermes scheduled bots retain their existing platform scope.
 
 The database search engine in `src/med_lit_mcp/medsearch/` (query compilation, MeSH resolution, PubMed/PMC/OpenAlex/Semantic Scholar/Scopus clients, deduplication and ranking) was merged from [hermes-medical-search](https://github.com/junhewk/hermes-medical-search) 0.2.1 (MIT) and is maintained here. For debugging it can run on its own: `uv run python -m med_lit_mcp.medsearch --help`.
 
 ## License
 
 med-lit-mcp is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE). You may use, modify and share it for any noncommercial purpose, including research, teaching, and use by educational institutions, public research organizations and public health organizations. Commercial use needs a separate license; open an issue to ask. [NOTICE](NOTICE) records the MIT-licensed origin of the search engine.
-
