@@ -375,7 +375,7 @@ For platform installer builds, signing and release steps, see [Installation and 
 
 ### Compatibility and validation
 
-Review locks, private credential storage and process recovery support Linux, macOS and Windows. The 0.1.7 suite passed **229 tests on Linux**; the final 0.1.6 suites passed 221 on native macOS and 223 on native Windows. CI tests all three operating systems before every release.
+Review locks, private credential storage and process recovery support Linux, macOS and Windows. The 0.1.7 suites passed **229 tests on Linux and 230 on native macOS**; the final 0.1.6 suite passed 223 on native Windows. CI tests all three operating systems before every release.
 
 The signed Mac DMG passed Apple notarization, a quarantined Chrome download, normal Finder launch, browser Save/connect and actual MCP startup with 31 tools after eject. Windows passed native batch execution, fresh verified runtime installation and browser Save/connect in Edge. ChatGPT Work on Mac also completed search, screening, full-text fetch, extraction, synthesis and a cited wiki export.
 

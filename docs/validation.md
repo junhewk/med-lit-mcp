@@ -34,11 +34,11 @@ Cleanup removed the setup-plugin artifact, Mac script launcher, mixed platform b
 
 ## Current Mac build
 
-The released `med-lit-macos-0.1.6.dmg` was rebuilt on the signing Mac from release commit `a1b8c44`, which adds the graph export to the Python package; the launcher is unchanged:
+The released `med-lit-macos-0.1.7.dmg` was built on the signing Mac from release commit `f543c7d`; the launcher and build scripts are unchanged since 0.1.6:
 
-- SHA-256: `2777ed9fbb08dd273565b5536398f9d6d5c004515f45e7ecb8c0bdb8b73504f5`.
-- Apple submission: `0e6485dd-258f-454d-a7ae-d32e3aa69d46`, **Accepted**.
-- Developer ID signature, stapling, ticket validation and Gatekeeper assessment passed. The bundled wheel is `med_lit_mcp-0.1.6` built from that commit; the native macOS suite passed on it.
+- SHA-256: `3e67e3fae0b0a8d655ce5a121c9693710caf8c626e752f11183760a3ed9da33c`.
+- Apple submission: `0ca51262-2f9b-4768-8737-8c92a094f1ac`, **Accepted**.
+- Developer ID signature, stapling, ticket validation and Gatekeeper assessment passed. The bundled wheel is `med_lit_mcp-0.1.7` built from that commit; the native macOS suite passed on it (230 tests).
 - Desktop launch evidence comes from the previous build of the same launcher (SHA-256 `7ab8ccc9…4b7617`, submission `4a7858db-bf58-42f8-83df-7c650b5d3485`): Chrome downloaded the exact DMG with quarantine intact. Normal Finder launch showed Apple's trusted Open prompt; isolated browser and native Ready passed. After closing and ejecting the DMG, the exact registered persistent-wheel command connected with **31 tools, exit 0**. Setup ports and the owned download server closed; existing settings remained unchanged. Its evidence directory on the Mac is `/tmp/med-lit-native-consolidated-final`.
 - A copy of the DMG, checksum and notarization report is in the Linux checkout's ignored `dist-macos/` directory.
 
