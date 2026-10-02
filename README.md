@@ -19,8 +19,6 @@ med-lit-mcp is on [PyPI](https://pypi.org/project/med-lit-mcp/) and runs through
 | ChatGPT desktop Work/Codex on Windows x64 | `Install med-lit.bat` | Local browser form |
 | ChatGPT desktop Work/Codex on macOS | Signed, notarized `.dmg` | Local browser form |
 
-**This checkout is version 0.1.6, which is not yet published.** Native Codex setup and the ChatGPT installers described below belong to this version. For now, test them from a checkout using the [development instructions](#development). The matching installer assets will be available after release.
-
 ### Hermes, Claude Code and Codex: CLI setup
 
 ```bash
@@ -50,9 +48,7 @@ Setup writes only the `med-lit` entry in `~/.codex/config.toml` (or `$CODEX_HOME
 
 ### ChatGPT desktop: download and open the installer
 
-This flow targets **desktop Work/Codex with local computer access** on macOS (Apple Silicon or Intel) and Windows x64. Hosted Chat and mobile do not run the local server. **The 0.1.6 launchers are prepared but not released; see the [validation status](docs/validation.md#release-gates).**
-
-After the matching installer assets are published:
+This flow targets **desktop Work/Codex with local computer access** on macOS (Apple Silicon or Intel) and Windows x64. Hosted Chat and mobile do not run the local server.
 
 1. Download the installer from the [release page](https://github.com/junhewk/med-lit-mcp/releases/latest): **Windows:** `Install med-lit.bat`; **macOS:** `med-lit-macos-<version>.dmg`, then open the disk image and double-click **med-lit Installer**. Accept the normal macOS downloaded-app confirmation if shown.
 2. The installer finds or installs uv and Python, showing progress in a native window on Mac or a console window on Windows. Complete the browser form: your contact email, reviews folder (use **Choose folder…** or keep the suggested path), and optional database keys. No terminal commands are needed.
@@ -347,7 +343,7 @@ Things to know:
 - **Exports rewrite only changed files,** so Git or a sync service sees real changes only.
 - **Back up the whole folder, including `.med-lit/`.** Avoid opening the same project from two machines through a file-sync service while it is in use: the database inside is a live SQLite file.
 
-**Simple Graph Builder.** The ontology is designed so that a future version of the [Simple Graph Builder](https://github.com/junhewk/simple-graph-builder) plugin can import a project's graph into your own vault, with typed relationships and their evidence. Until then, if you open a project inside a vault where that plugin runs, add the project folder to its *Analysis Exclusions*. Otherwise it would re-extract entities from these pages with its own LLM, creating a second, unsourced copy of the graph.
+**Simple Graph Builder.** The ontology is designed so that the [Simple Graph Builder](https://github.com/junhewk/simple-graph-builder) plugin can import a project's graph into your own vault, with typed relationships and their evidence. Every export also writes the graph to `.med-lit/sgb-export.json` for that importer, in step with the pages ([format](docs/ontology.md#graph-export)). Until your version of the plugin imports med-lit projects, if you open a project inside a vault where that plugin runs, add the project folder to its *Analysis Exclusions*. Otherwise it would re-extract entities from these pages with its own LLM, creating a second, unsourced copy of the graph.
 
 ## Viewer (optional)
 
