@@ -122,6 +122,7 @@ class BotRunTests(BotCase):
         state = bot.read_state(self.bot)
         self.assertIsNone(state["active"])
         self.assertEqual(state["history"][-1]["new_articles"], 3)
+        self.assertEqual(read_json(self.bot.work / "sgb-export.json")["bot_update"], 1)
 
     def test_a_quiet_run_is_silent_and_known_articles_are_skipped(self) -> None:
         self.found = [record(1)]
@@ -204,6 +205,7 @@ class BotRunTests(BotCase):
         atomic_json(state_path, state)
         self.found = [record(1, title="Study 1"), record(2, title="Study 2"), record(3, title="Study 3")]
         self.start()
+        self.assertEqual(bot.latest_update(self.bot), 2)
         self.screen({"pubmed:3": "exclude"})
         self.assertEqual(bot.bot_next("Watch")["step"], "fetch")  # the stopped run's include is fetched now
         text = Path(bot.bot_finish("Watch")["report"]).read_text()
@@ -212,6 +214,7 @@ class BotRunTests(BotCase):
         self.assertIn("included 1, excluded 1, uncertain 1", text)
         history = bot.read_state(self.bot)["history"]
         self.assertEqual([h["outcome"][:7] for h in history], ["stopped", "finishe"])
+        self.assertEqual(read_json(self.bot.work / "sgb-export.json")["bot_update"], 2)
 
     def test_paused_bots_do_not_run(self) -> None:
         bot.set_status(self.bot, "paused")

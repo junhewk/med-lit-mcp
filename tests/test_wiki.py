@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from helpers import Case, record
 
@@ -300,6 +301,114 @@ class WikiTests(Case):
         wiki_export.export_wiki(self.project)
         names = sorted(path.name for path in (self.project.root / "entities").glob("*.md"))
         self.assertEqual(names, ["C (concept).md", "C sharp.md"])
+
+    def graph(self) -> dict:
+        return read_json(self.project.work / wiki_export.GRAPH_FILE)
+
+    def assert_pages_exist(self, graph: dict) -> None:
+        for row in graph["entities"] + graph["articles"]:
+            self.assertIsNotNone(row["page"], row)
+            self.assertTrue((self.project.root / row["page"]).is_file(), row["page"])
+
+    def build_graph(self) -> None:
+        self.extract(
+            "pubmed:1",
+            [
+                entity("large language model", "Large language models (LLMs)", role="intervention"),
+                entity("shared decision-making", "shared decision-making (SDM)", "CONCEPT", role="outcome"),
+                entity("chatbot", "The chatbot"),
+            ],
+            [relation("large language model", "shared decision-making", "supported shared decision-making")],
+        )
+        self.extract(
+            "pubmed:2",
+            [entity("large language model", "LLMs drafted"), entity("clinician review", "checked by clinicians", "METHOD")],
+            [relation("large language model", "clinician review", "checked by clinicians")],
+        )
+
+    def test_graph_export_matches_the_database_and_pages(self) -> None:
+        self.build_graph()
+        result = wiki_export.export_wiki(self.project)
+        self.assertTrue(result["graph_written"])
+        graph = self.graph()
+        self.assertEqual((graph["format"], graph["project"]["id"]), ("med-lit-sgb/1", self.project.id))
+        self.assertIsNone(graph["bot_update"])
+        self.assert_pages_exist(graph)
+        with database(self.project.db) as conn:
+            mentions = conn.execute("SELECT COUNT(*) FROM (SELECT DISTINCT article_uid, entity_id, role FROM kg_mentions)").fetchone()[0]
+            relationships = conn.execute("SELECT COUNT(*) FROM kg_relationships").fetchone()[0]
+            evidence = conn.execute("SELECT COUNT(*) FROM kg_relationship_evidence").fetchone()[0]
+            entities = conn.execute("SELECT COUNT(*) FROM kg_entities").fetchone()[0]
+        self.assertEqual(len(graph["mentions"]), mentions)
+        self.assertEqual(len(graph["relationships"]), relationships)
+        self.assertEqual(sum(len(r["evidence"]) for r in graph["relationships"]), evidence)
+        self.assertEqual((len(graph["entities"]), len(graph["articles"])), (entities, 2))
+        llm = next(e for e in graph["entities"] if e["name"] == "large language model")
+        self.assertEqual((llm["type"], llm["sgb_type"], llm["page"]), ("TECHNOLOGY", "TOOL", "entities/large language model.md"))
+        self.assertIn({"alias": "LLM", "source": "acronym"}, llm["aliases"])
+        self.assertNotIn("large language model", [a["alias"] for a in llm["aliases"]])
+        self.assertIn({"article": "pubmed:1", "entity": llm["id"], "role": "intervention"}, graph["mentions"])
+        self.assertEqual(graph["relationships"][0]["evidence"], [{"article": "pubmed:1", "quote": "supported shared decision-making"}])
+        self.assertEqual({key for a in graph["articles"] for key in a}, {"uid", "title", "doi", "published", "content_type", "page"})
+
+    def test_graph_export_is_unchanged_without_data_changes(self) -> None:
+        self.build_graph()
+        wiki_export.export_wiki(self.project)
+        path = self.project.work / wiki_export.GRAPH_FILE
+        before = path.read_bytes()
+        self.assertFalse(wiki_export.export_wiki(self.project)["graph_written"])
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_an_interrupted_graph_export_keeps_the_previous_file(self) -> None:
+        self.build_graph()
+        wiki_export.export_wiki(self.project)
+        path = self.project.work / wiki_export.GRAPH_FILE
+        before = path.read_bytes()
+        keep = wiki.find_entities(self.project, "chatbot")[0]["id"]
+        wiki.merge_entities(self.project, keep, [], canonical_name="Chat assistant", reason="rename")
+        with patch("med_lit_mcp.store.os.replace", side_effect=OSError("disk full")), self.assertRaises(OSError):
+            wiki_export.export_wiki(self.project)
+        self.assertEqual(path.read_bytes(), before)
+        self.assert_pages_exist(json.loads(before))
+        self.assertEqual([p.name for p in self.project.work.glob(f".{wiki_export.GRAPH_FILE}.*")], [])
+
+    def test_graph_export_shows_merges(self) -> None:
+        self.build_graph()
+        keep = wiki.find_entities(self.project, "large language model")[0]["id"]
+        other = wiki.find_entities(self.project, "chatbot")[0]["id"]
+        wiki.merge_entities(self.project, keep, [other], reason="same system")
+        wiki_export.export_wiki(self.project)
+        graph = self.graph()
+        ids = [e["id"] for e in graph["entities"]]
+        self.assertIn(keep, ids)
+        self.assertNotIn(other, ids)
+        self.assertEqual([(m["kept"], m["merged"], m["name"]) for m in graph["merges"]], [(keep, other, "chatbot")])
+        self.assert_pages_exist(graph)
+
+    def test_a_withdrawn_article_leaves_the_graph_export(self) -> None:
+        self.build_graph()
+        with database(self.project.db) as conn:
+            wiki.withdraw_article(conn, "pubmed:2", 2)
+        wiki_export.export_wiki(self.project)
+        text = (self.project.work / wiki_export.GRAPH_FILE).read_text(encoding="utf-8")
+        self.assertNotIn("pubmed:2", text)
+        graph = json.loads(text)
+        self.assertEqual([a["uid"] for a in graph["articles"]], ["pubmed:1"])
+        self.assertNotIn("clinician review", [e["name"] for e in graph["entities"]])
+        self.assert_pages_exist(graph)
+
+    def test_a_synthesis_writes_the_graph_export_with_every_page(self) -> None:
+        self.build_graph()
+        context = wiki.next_synthesis(self.project, self.run_id)
+        self.assertEqual(context["name"], "large language model")
+        body = "## Overview\n\n" + "LLMs supported decisions [pubmed:1] and drafted aids [pubmed:2]. " * 4
+        wiki.record_synthesis(
+            self.project, context["id"], context["input_digest"], summary="LLMs.", synthesis=body, key_aspects=["aid"]
+        )
+        graph = self.graph()
+        self.assertEqual(len(graph["entities"]), 4)  # entities without a synthesis get their pages too
+        self.assert_pages_exist(graph)
+        self.assertTrue((self.project.root / "entities" / "chatbot.md").is_file())
 
 
 TEXT_C = (

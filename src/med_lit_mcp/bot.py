@@ -114,6 +114,25 @@ def bot_brief(project: Project) -> dict[str, Any]:
     }
 
 
+def _update_numbers(run: dict[str, Any] | None) -> list[int]:
+    """The search updates a run covers (a run that finished a stopped one covers both)."""
+    if not run:
+        return []
+    return run.get("updates") or ([run["update"]] if run.get("update") else [])
+
+
+def latest_update(project: Project) -> int | None:
+    """The newest bot update whose work the wiki may include: the running run's, else the last run's."""
+    if project.mode != "bot":
+        return None
+    try:
+        state = read_state(project)
+    except (OSError, ValueError):
+        return None
+    last = (state.get("history") or [None])[-1]
+    return max(_update_numbers(state.get("active")) or _update_numbers(last), default=None)
+
+
 def _today() -> date:
     """The machine's local date: the day a scheduled run belongs to (05:30 KST is still yesterday in UTC)."""
     return datetime.now(UTC).astimezone().date()
@@ -218,7 +237,7 @@ def bot_start(name: str | None) -> dict[str, Any]:
             )
             carried = {
                 "covers_from": active.get("covers_from", active["started_at"]),
-                "updates": active.get("updates") or ([active["update"]] if active.get("update") else []),
+                "updates": _update_numbers(active),
                 "withdrawn": active.get("withdrawn", []),
                 "stopped_runs": active.get("stopped_runs", 0) + 1,
             }
@@ -486,7 +505,7 @@ def bot_finish(name: str | None) -> dict[str, Any]:
         export_error = None
     manifest = read_json(path / RUN_FILE)
     revision = manifest.get("selection_revision")
-    numbers = set(active.get("updates") or ([active["update"]] if active.get("update") else []))
+    numbers = set(_update_numbers(active))
     covered = [u for u in manifest.get("updates", []) if u.get("number") in numbers]
     update = covered[-1] if covered else {}
     unidentified = {uid for u in covered for uid in u.get("no_identifier", [])}
