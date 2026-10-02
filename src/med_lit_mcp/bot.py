@@ -348,6 +348,8 @@ def bot_next(name: str | None) -> dict[str, Any]:
     with locked_run(path) as manifest:
         search.poll(path, manifest)
         running = manifest["search_status"] == "running"
+        if screening.requeue_vague(manifest):
+            save_run(path, manifest)
     if running and search._wait(path, SEARCH_WAIT)["search_status"] == "running":
         return {"step": "wait", "do": f"The search is still running; call bot_next(project={project.name!r}) again."}
     manifest = read_json(path / RUN_FILE)

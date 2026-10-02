@@ -44,6 +44,24 @@ def _specific(reason: str) -> bool:
     return len([w for w in words if w not in GENERIC_REASON_WORDS]) >= 3
 
 
+def requeue_vague(manifest: dict[str, Any]) -> int:
+    """Send unspecific uncertain reasons back to screening (recorded before the check existed)."""
+    revision = manifest.get("selection_revision")
+    requeued = 0
+    for item in manifest["articles"].values():
+        screening = item.get("screening") or {}
+        if (
+            screening.get("revision") == revision
+            and screening.get("method") == "agent"
+            and screening.get("decision") == "uncertain"
+            and "validation_error" not in screening
+            and not _specific(screening.get("reason") or "")
+        ):
+            item.setdefault("screening_history", []).append(item.pop("screening") | {"requeued": "reason not specific"})
+            requeued += 1
+    return requeued
+
+
 def validate_decision(
     decision: str, reason: str, evidence: str, title: str, abstract: str
 ) -> str | None:
@@ -108,7 +126,7 @@ def next_batch(run_id: str, batch_size: int = 10) -> dict[str, Any]:
         revision = manifest.get("selection_revision")
         if revision is None:
             raise ValueError("Set screening criteria first with set_screening_criteria")
-        items, changed = [], False
+        items, changed = [], requeue_vague(manifest) > 0
         pending = 0
         for uid, item in manifest["articles"].items():
             if (item.get("screening") or {}).get("revision") == revision:

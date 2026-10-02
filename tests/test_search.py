@@ -242,6 +242,22 @@ class KnownArticleTests(Case):
         result = self.search([record(9), twin])
         self.assertEqual((result["candidates"], result["already_known"]), (1, 0))
 
+    def test_an_identical_long_abstract_marks_one_article(self) -> None:
+        abstract = "Introduction: medical students practised history taking with a virtual patient. " * 5
+        version = {"source": "openalex", "source_id": "W1", "doi": "10.5281/zenodo.11", "title": "Dataset", "abstract": abstract}
+        concept = {**version, "source_id": "W2", "doi": "10.5281/zenodo.12"}
+        first = self.search([version, concept])
+        self.assertEqual(first["candidates"], 1)  # two repository DOIs, one deposit
+        # An index copy found later under a shorter title, with the abstract's spacing changed.
+        index_copy = {"source": "openalex", "source_id": "W3", "doi": "10.9/doaj.3", "title": "Index copy",
+                      "abstract": abstract.replace(". ", ".  ").upper()}
+        boilerplate = {"source": "openalex", "source_id": "W4", "doi": "10.9/other.4", "title": "Other",
+                       "abstract": "An abstract is not available for this content."}
+        second = self.search([index_copy, boilerplate, {**boilerplate, "source_id": "W5", "doi": "10.9/other.5"}])
+        self.assertEqual((second["candidates"], second["already_known"]), (2, 1))  # short abstracts never match
+        manifest = read_json(run_dir(second["run_id"]) / RUN_FILE)
+        self.assertEqual(manifest["already_known"]["openalex:W3"]["uid"], "openalex:W1")
+
 
 class IdentifierTests(Case):
     def search(self, records: list[dict[str, Any]]) -> dict[str, Any]:

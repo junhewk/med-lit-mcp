@@ -4,7 +4,7 @@ from helpers import RECORD, Case, record
 
 from med_lit_mcp import fetch, screening
 from med_lit_mcp.projects import run_dir
-from med_lit_mcp.store import RUN_FILE, read_json
+from med_lit_mcp.store import RUN_FILE, read_json, save_run
 
 
 class ScreeningTests(Case):
@@ -87,3 +87,24 @@ class ScreeningTests(Case):
             [self.decide("pubmed:125", "uncertain", reason="Abstract does not say whether the veterinary trainees are students")],
         )
         self.assertEqual((specific["recorded"], specific["downgraded"]), (1, []))
+
+    def test_a_vague_reason_from_before_the_check_is_screened_again(self) -> None:
+        screening.set_criteria(self.run_id, ["communication training"], ["veterinary"])
+        screening.next_batch(self.run_id)
+        screening.record_decisions(
+            self.run_id, 1, [self.decide("pubmed:125", "uncertain", reason="Ambiguous case for researcher review")]
+        )  # downgraded with a validation error: one correction allowed, then the researcher decides
+        screening.review(self.run_id, "pubmed:124", "exclude", "Unclear")  # the researcher's own words stay
+        path = run_dir(self.run_id)
+        manifest = read_json(path / RUN_FILE)
+        manifest["articles"]["pubmed:123"]["screening"] = {  # as recorded before reasons were checked
+            "decision": "uncertain", "reason": "Ambiguous case for researcher review", "evidence": "",
+            "revision": 1, "method": "agent", "reviewed_at": "2026-09-30T09:49:20+00:00",
+        }
+        save_run(path, manifest)
+        batch = screening.next_batch(self.run_id)
+        self.assertEqual(([item["uid"] for item in batch["items"]], batch["remaining"]), (["pubmed:123"], 1))
+        saved = read_json(path / RUN_FILE)["articles"]
+        self.assertEqual(saved["pubmed:123"]["screening_history"][-1]["requeued"], "reason not specific")
+        self.assertEqual(saved["pubmed:125"]["screening"]["decision"], "uncertain")
+        self.assertEqual(saved["pubmed:124"]["screening"]["method"], "manual")

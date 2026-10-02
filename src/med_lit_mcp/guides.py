@@ -65,8 +65,8 @@ non-zero records_filtered_by_source. A retrieved and screened set is not a compl
 - Articles without a DOI, PMID or PMCID are skipped (skipped_no_identifier in the run status). Add
   them with add_skipped_articles only when the researcher asks for them.
 - A later search in the same project imports only articles new to the project (matched by DOI,
-  PMID, PMCID or record id). Articles an earlier search found are counted as already_known and keep
-  that search's screening and wiki work; say so when reporting the results.""",
+  PMID, PMCID, record id or an identical abstract). Articles an earlier search found are counted
+  as already_known and keep that search's screening and wiki work; say so when reporting the results.""",
     "screening": """\
 # Screening titles and abstracts
 
