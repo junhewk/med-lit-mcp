@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -18,6 +19,7 @@ from typing import Any
 
 from . import __version__
 from .config import user_path
+from .platforms import protect
 
 CONFIG_FILE = "config.json"
 KEYS_FILE = "keys.json"
@@ -68,15 +70,21 @@ def _write_private(name: str, data: dict[str, str]) -> Path:
     """Write a file only the user can read (directory 0700, file 0600), atomically."""
     directory = config_dir()
     directory.mkdir(parents=True, exist_ok=True)
-    directory.chmod(0o700)
+    protect(directory, directory=True)
     path = directory / name
-    temporary = directory / f".{name}.tmp"
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        json.dump(dict(sorted(data.items())), handle, indent=2)
-        handle.write("\n")
-    os.replace(temporary, path)
-    path.chmod(0o600)
+    fd, temporary_name = tempfile.mkstemp(dir=directory, prefix=f".{name}.")
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            protect(temporary)
+            json.dump(dict(sorted(data.items())), handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        protect(path)
+    finally:
+        temporary.unlink(missing_ok=True)
     return path
 
 

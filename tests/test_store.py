@@ -49,15 +49,15 @@ class StoreTests(Case):
 
     def test_folder_settings_expand_variables_and_never_depend_on_the_working_directory(self) -> None:
         home = self.root / "home"
-        with patch.dict(os.environ, {"HOME": str(home), "MED_LIT_PROJECTS_DIR": "${HOME}/reviews"}):
+        with patch.dict(os.environ, {"HOME": str(home), "USERPROFILE": str(home), "MED_LIT_PROJECTS_DIR": "${HOME}/reviews"}):
             self.assertEqual(config.projects_dir(), home / "reviews")
             created = projects.create_project("Desktop test")
             self.assertEqual(created.root, home / "reviews" / "Desktop test")
             nested = projects.create_project("Nested", "topics/nested")
             self.assertEqual(nested.root, home / "reviews" / "topics" / "nested")
-        with patch.dict(os.environ, {"HOME": str(home), "MED_LIT_PROJECTS_DIR": "relative/reviews"}):
+        with patch.dict(os.environ, {"HOME": str(home), "USERPROFILE": str(home), "MED_LIT_PROJECTS_DIR": "relative/reviews"}):
             self.assertEqual(config.projects_dir(), home / "relative" / "reviews")
-        with patch.dict(os.environ, {"HOME": str(home), "MED_LIT_PROJECTS_DIR": "  "}):
+        with patch.dict(os.environ, {"HOME": str(home), "USERPROFILE": str(home), "MED_LIT_PROJECTS_DIR": "  "}):
             self.assertEqual(config.projects_dir(), home / "med-lit")
 
     def test_moved_project_is_found_again_with_its_runs(self) -> None:

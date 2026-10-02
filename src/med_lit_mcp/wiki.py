@@ -1112,7 +1112,11 @@ def work_plan(run_id: str, max_syntheses: int | None = None) -> dict[str, Any]:
             row = conn.execute("SELECT * FROM articles WHERE uid=?", (uid,)).fetchone()
             if row is None or row["kg_sha256"] == row["content_sha256"]:
                 continue
-            pages = int(row["kg_page_count"] or len(_pages(row)))
+            # Before the reader fixes the count, preview the same project limit it uses.
+            pages = row["kg_page_count"]
+            if pages is None:
+                total = len(_pages(row))
+                pages = min(total, settings.max_pages) if settings.max_pages else total
             done = len(_recorded_pages(conn, uid, row["content_sha256"]))
             articles.append((uid, row["title"] or uid, pages - done))
         pending_duplicates = conn.execute(

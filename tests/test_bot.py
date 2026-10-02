@@ -273,6 +273,8 @@ esac
 
 class SetupBotTests(Case):
     def test_setup_bot_copies_a_tried_search_and_schedules_it_in_the_bot_profile(self) -> None:
+        if os.name == "nt":
+            self.skipTest("Hermes bot registration uses a Unix shell fixture")
         run_id = self.make_run([record(1)])
         bin_dir = self.root / "bin"
         bin_dir.mkdir()

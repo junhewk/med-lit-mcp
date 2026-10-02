@@ -27,6 +27,7 @@ from typing import Any
 
 from . import screening, search, wiki
 from .projects import Project, create_project, get_project, new_run_dir
+from .platforms import process_alive
 from .runs import is_eligible
 from .settings import apply_changes, load_settings, write_settings
 from .store import (
@@ -189,7 +190,8 @@ def _last_write(project: Project, state: dict[str, Any]) -> datetime:
 def _run_alive(project: Project, state: dict[str, Any]) -> bool:
     """Whether the run that holds the project is still going (not crashed, not hung)."""
     try:
-        os.kill(int(state["active"]["pid"]), 0)
+        if not process_alive(int(state["active"]["pid"])):
+            return False
     except ProcessLookupError:
         return False
     except (PermissionError, KeyError, TypeError, ValueError):
