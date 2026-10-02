@@ -34,13 +34,12 @@ Cleanup removed the setup-plugin artifact, Mac script launcher, mixed platform b
 
 ## Current Mac build
 
-The corrected `med-lit Installer.app` is bundled in `med-lit-macos-0.1.6.dmg`:
+The released `med-lit-macos-0.1.6.dmg` was rebuilt on the signing Mac from release commit `a1b8c44`, which adds the graph export to the Python package; the launcher is unchanged:
 
-- SHA-256: `7ab8ccc95b53c1255895673abc864386909c9c5521c2a29bece679b25a7b4617`.
-- Apple submission: `4a7858db-bf58-42f8-83df-7c650b5d3485`, **Accepted**.
-- Developer ID signature, stapling, ticket validation and Gatekeeper assessment passed.
-- Chrome downloaded the exact DMG with quarantine intact. Normal Finder launch showed Apple's trusted Open prompt; isolated browser and native Ready passed. After closing and ejecting the DMG, the exact registered persistent-wheel command connected with **31 tools, exit 0**. Setup ports and the owned download server closed; existing settings remained unchanged.
-- Build and desktop evidence directory on Mac: `/tmp/med-lit-native-consolidated-final`.
+- SHA-256: `2777ed9fbb08dd273565b5536398f9d6d5c004515f45e7ecb8c0bdb8b73504f5`.
+- Apple submission: `0e6485dd-258f-454d-a7ae-d32e3aa69d46`, **Accepted**.
+- Developer ID signature, stapling, ticket validation and Gatekeeper assessment passed. The bundled wheel is `med_lit_mcp-0.1.6` built from that commit; the native macOS suite passed on it.
+- Desktop launch evidence comes from the previous build of the same launcher (SHA-256 `7ab8ccc9…4b7617`, submission `4a7858db-bf58-42f8-83df-7c650b5d3485`): Chrome downloaded the exact DMG with quarantine intact. Normal Finder launch showed Apple's trusted Open prompt; isolated browser and native Ready passed. After closing and ejecting the DMG, the exact registered persistent-wheel command connected with **31 tools, exit 0**. Setup ports and the owned download server closed; existing settings remained unchanged. Its evidence directory on the Mac is `/tmp/med-lit-native-consolidated-final`.
 - A copy of the DMG, checksum and notarization report is in the Linux checkout's ignored `dist-macos/` directory.
 
 ## Release gates
