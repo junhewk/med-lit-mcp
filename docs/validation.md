@@ -1,6 +1,6 @@
 # Validation status
 
-The consolidated source uses four installation routes described in [Installation and release](installation.md). Linux, Mac and Windows development checkouts are synchronized; no package or installer has been publicly released.
+The consolidated source uses four installation routes described in [Installation and release](installation.md). Linux, Mac and Windows development checkouts are synchronized. Version 0.1.6 is the first release with the ChatGPT installers.
 
 ## Desktop evidence
 
@@ -45,7 +45,6 @@ The corrected `med-lit Installer.app` is bundled in `med-lit-macos-0.1.6.dmg`:
 
 ## Release gates
 
-- Version 0.1.6 is unpublished on PyPI and GitHub. Windows and Claude launchers need matching PyPI publication; the Mac DMG carries its package.
 - Test the unmodified Windows batch downloaded from the public release. Existing desktop tests used isolated developer settings and local files.
 - Mac runtime execution has been tested on ARM64. The Intel slice is compiled and inspected but has not run on an Intel host.
 - Actual desktop tests supplement automated tests; source-checkout tests do not establish public download behavior.

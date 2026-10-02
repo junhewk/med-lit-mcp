@@ -55,8 +55,6 @@ This builds the current portable wheel and universal arm64/x86_64 launcher, sign
 4. Attach the validated DMG and `SHA256SUMS-macos` to the same release. This local signing process needs no private-key export or GitHub signing secret.
 5. Test the downloaded public Windows batch against the published version before announcing it to users.
 
-Version **0.1.6 remains unpublished**. Public release/upload is a separate action.
-
 ## Development
 
 ```bash
