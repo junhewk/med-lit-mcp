@@ -136,6 +136,18 @@ class BotRunTests(BotCase):
         self.assertEqual(bot.bot_finish("Watch"), {"message": bot.SILENT, "note": "Nothing new this run"})
         self.assertEqual(len(list((self.bot.root / "updates").glob("*.md"))), 1)
 
+    def test_a_vague_uncertain_reason_from_an_older_run_is_screened_again(self) -> None:
+        self.found = [record(1)]
+        self.start()
+        manifest = self.manifest()
+        manifest["articles"]["pubmed:1"]["screening"] = {
+            "decision": "uncertain", "reason": "Ambiguous case for researcher review", "evidence": "",
+            "revision": 1, "method": "agent", "reviewed_at": "2026-09-30T09:49:20+00:00",
+        }
+        atomic_json(self.path / RUN_FILE, manifest)
+        step = bot.bot_next("Watch")
+        self.assertEqual((step["step"], step["pending"]), ("screen", 1))
+
     def test_new_criteria_rescreen_and_withdraw_articles_from_the_wiki(self) -> None:
         self.found = [record(1, title="Oncology SDM")]
         self.start()

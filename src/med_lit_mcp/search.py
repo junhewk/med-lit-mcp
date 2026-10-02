@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import os
@@ -216,6 +217,7 @@ def record_uid(record: dict[str, Any]) -> str:
 
 
 TITLE_MATCH_MIN = 40  # a title shorter than this must match exactly, not as a prefix
+ABSTRACT_KEY_MIN = 300  # a shorter abstract may be boilerplate that unrelated records share
 
 
 def _title_key(title: Any) -> str:
@@ -297,7 +299,10 @@ def find_identifiers(record: dict[str, Any]) -> tuple[dict[str, str] | None, str
 
 
 def _record_keys(uid: str, record: dict[str, Any]) -> list[str]:
-    """Identifiers that mark two records, possibly from different sources, as one article."""
+    """Identifiers that mark two records, possibly from different sources, as one article.
+
+    An identical long abstract counts too: repository versions (Zenodo, Figshare) carry a DOI each,
+    and an index copy (DOAJ) may sit beside the journal's own record under another title."""
     keys = [f"uid:{uid}"]
     doi = str(record.get("doi") or "").strip().lower().removeprefix("https://doi.org/")
     if doi:
@@ -307,6 +312,9 @@ def _record_keys(uid: str, record: dict[str, Any]) -> list[str]:
     if record.get("pmcid"):
         pmcid = str(record["pmcid"]).strip().upper()
         keys.append(f"pmcid:{pmcid if pmcid.startswith('PMC') else 'PMC' + pmcid}")
+    abstract = _title_key(record.get("abstract"))
+    if len(abstract) >= ABSTRACT_KEY_MIN:
+        keys.append(f"abstract:{hashlib.sha256(abstract.encode()).hexdigest()[:32]}")
     return keys
 
 
