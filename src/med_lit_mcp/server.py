@@ -67,9 +67,15 @@ Tools by stage (if your client loads tools on demand, look them up by these name
 """
 
 mcp = FastMCP("med-lit", instructions=INSTRUCTIONS)
-READ = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
-LOCAL = ToolAnnotations(readOnlyHint=False, openWorldHint=False)
-NETWORK = ToolAnnotations(readOnlyHint=False, openWorldHint=True)
+# Cover every supported path, including lazy database creation and migrations in query tools.
+# Updates can overwrite existing state; only additive operations use destructiveHint=False.
+READ = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
+LOCAL_ADD = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
+LOCAL_ADD_IDEMPOTENT = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False)
+LOCAL_UPDATE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False)
+LOCAL_UPDATE_IDEMPOTENT = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False)
+NETWORK_ADD = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True)
+NETWORK_UPDATE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True)
 T = TypeVar("T")
 RunId = Annotated[str, Field(pattern=r"^[0-9a-f]{32}$", description="Run ID from start_search")]
 ProjectName = Annotated[
@@ -116,7 +122,7 @@ def _page(result: dict[str, Any]) -> list[TextContent]:
     ]
 
 
-@mcp.tool(annotations=LOCAL)
+@mcp.tool(annotations=LOCAL_UPDATE)
 async def create_project(
     name: Annotated[str, Field(min_length=1, max_length=80, description="Review topic, e.g. 'LLMs in shared decision making'")],
     path: Annotated[
@@ -131,7 +137,7 @@ async def create_project(
     return project.summary() | {"note": "Search with start_search(project=...) once the question is approved."}
 
 
-@mcp.tool(annotations=LOCAL)
+@mcp.tool(annotations=LOCAL_UPDATE_IDEMPOTENT)
 async def project_settings(
     project: ProjectName = None,
     changes: Annotated[
@@ -161,7 +167,7 @@ async def list_projects() -> list[dict[str, Any]]:
     return await _run(projects.list_projects)
 
 
-@mcp.tool(annotations=LOCAL)
+@mcp.tool(annotations=LOCAL_UPDATE_IDEMPOTENT)
 async def open_project(path: Annotated[str, Field(description="Folder of an existing project")]) -> dict[str, Any]:
     """Register an existing project folder, for example after it was moved or copied from elsewhere."""
     project = await _run(projects.open_project, path)
@@ -175,7 +181,7 @@ async def guide(topic: Literal[tuple(GUIDES)]) -> str:  # type: ignore[valid-typ
     return GUIDES[topic]
 
 
-@mcp.tool(annotations=READ)
+@mcp.tool(annotations=LOCAL_ADD)
 async def validate_question(
     question: ResearchQuestion, sources: list[Source] | None = None, project: ProjectName = None
 ) -> dict[str, Any]:
@@ -190,7 +196,7 @@ async def validate_question(
     return await _run(check)
 
 
-@mcp.tool(annotations=NETWORK)
+@mcp.tool(annotations=NETWORK_ADD)
 async def start_search(
     question_id: Annotated[str, Field(description="From validate_question, after the researcher approved it")],
     project: ProjectName = None,
@@ -210,7 +216,7 @@ async def start_search(
     return await _run(start)
 
 
-@mcp.tool(annotations=NETWORK)
+@mcp.tool(annotations=NETWORK_UPDATE)
 async def resume_search(
     run_id: RunId,
     wait_seconds: Annotated[int, Field(ge=0, le=240)] = 45,
@@ -223,7 +229,7 @@ async def resume_search(
     return await _run(search.resume_search, run_id, wait_seconds, retry_failed_sources=retry_failed_sources)
 
 
-@mcp.tool(annotations=LOCAL)
+@mcp.tool(annotations=LOCAL_ADD_IDEMPOTENT)
 async def add_skipped_articles(
     run_id: RunId,
     uids: Annotated[list[str], Field(min_length=1, max_length=50, description="uids from the run's skipped_no_identifier list")],
@@ -235,7 +241,7 @@ async def add_skipped_articles(
     return await _run(search.add_skipped, run_id, uids)
 
 
-@mcp.tool(annotations=LOCAL)
+@mcp.tool(annotations=LOCAL_UPDATE_IDEMPOTENT)
 async def set_screening_criteria(
     run_id: RunId,
     include: Annotated[list[str], Field(description="Inclusion criteria in the researcher's words")],
@@ -251,13 +257,13 @@ async def set_screening_criteria(
     return await _run(save)
 
 
-@mcp.tool(annotations=LOCAL)
+@mcp.tool(annotations=LOCAL_UPDATE_IDEMPOTENT)
 async def next_screening_batch(run_id: RunId, batch_size: Annotated[int, Field(ge=1, le=25)] = 10) -> dict[str, Any]:
     """Get the next unscreened titles/abstracts with the criteria to judge them against."""
     return await _run(screening.next_batch, run_id, batch_size)
 
 
-@mcp.tool(annotations=LOCAL)
+@mcp.tool(annotations=LOCAL_UPDATE)
 async def record_screening_decisions(
     run_id: RunId,
     revision: Annotated[int, Field(description="revision from next_screening_batch")],
@@ -274,7 +280,7 @@ async def record_screening_decisions(
     )
 
 
-@mcp.tool(annotations=LOCAL)
+@mcp.tool(annotations=LOCAL_UPDATE)
 async def review_article(
     run_id: RunId,
     uid: str,
@@ -288,7 +294,7 @@ async def review_article(
     return await _run(screening.review, run_id, uid, decision, reason, client=_client(ctx))
 
 
-@mcp.tool(annotations=NETWORK)
+@mcp.tool(annotations=NETWORK_UPDATE)
 async def fetch_articles(
     run_id: RunId,
     uids: Annotated[list[str] | None, Field(description="Specific included articles; default is the next pending ones")] = None,
@@ -308,14 +314,14 @@ async def fetch_articles(
     )
 
 
-@mcp.tool(annotations=READ)
+@mcp.tool(annotations=LOCAL_UPDATE_IDEMPOTENT)
 async def wiki_tasks(run_id: RunId) -> dict[str, Any]:
     """Start here to build or update the wiki: the current step as self-contained tasks, each sized
     for one fresh subagent. Rules: guide("wiki")."""
     return await _run(wiki.work_plan, run_id)
 
 
-@mcp.tool(annotations=LOCAL, structured_output=False)
+@mcp.tool(annotations=LOCAL_UPDATE_IDEMPOTENT, structured_output=False)
 async def next_wiki_article(
     run_id: RunId,
     max_pages: Annotated[int | None, Field(ge=1, le=50, description="Limit pages read for the next article")] = None,
@@ -325,13 +331,13 @@ async def next_wiki_article(
     return _page(await _run(wiki.next_article, run_id, max_pages, uid))
 
 
-@mcp.tool(annotations=READ, structured_output=False)
+@mcp.tool(annotations=LOCAL_UPDATE_IDEMPOTENT, structured_output=False)
 async def get_article_page(run_id: RunId, uid: str, page: Annotated[int, Field(ge=0)]) -> list[TextContent]:
     """Re-read one page of a fetched article (pages are numbered from 0)."""
     return _page(await _run(wiki.get_page, run_id, uid, page))
 
 
-@mcp.tool(annotations=ToolAnnotations(idempotentHint=True, openWorldHint=False))
+@mcp.tool(annotations=LOCAL_UPDATE)
 async def record_extraction(
     run_id: RunId,
     uid: str,
@@ -355,7 +361,7 @@ async def record_extraction(
     )
 
 
-@mcp.tool(annotations=READ)
+@mcp.tool(annotations=LOCAL_UPDATE_IDEMPOTENT)
 async def find_entities(
     query: str,
     project: ProjectName = None,
@@ -366,7 +372,7 @@ async def find_entities(
     return await _run(lambda: wiki.find_entities(projects.get_project(project), query, entity_type, limit))
 
 
-@mcp.tool(annotations=READ)
+@mcp.tool(annotations=LOCAL_UPDATE_IDEMPOTENT)
 async def list_duplicate_candidates(
     project: ProjectName = None,
     run_id: Annotated[RunId | None, Field(description="Only pairs involving this run's articles")] = None,
@@ -376,7 +382,7 @@ async def list_duplicate_candidates(
     return await _run(lambda: wiki.list_duplicate_candidates(projects.get_project(project), run_id, limit))
 
 
-@mcp.tool(annotations=ToolAnnotations(destructiveHint=True, openWorldHint=False))
+@mcp.tool(annotations=LOCAL_UPDATE)
 async def resolve_duplicates(
     decisions: Annotated[list[DuplicateDecision], Field(min_length=1, max_length=50)],
     project: ProjectName = None,
@@ -386,7 +392,7 @@ async def resolve_duplicates(
     return await _run(lambda: wiki.resolve_duplicates(projects.get_project(project), payload))
 
 
-@mcp.tool(annotations=ToolAnnotations(destructiveHint=True, openWorldHint=False))
+@mcp.tool(annotations=LOCAL_UPDATE)
 async def merge_entities(
     keep_id: int,
     merge_ids: Annotated[list[int], Field(max_length=10, description="Entities folded into keep_id; empty to only rename or retype")],
@@ -404,7 +410,7 @@ async def merge_entities(
     )
 
 
-@mcp.tool(annotations=LOCAL)
+@mcp.tool(annotations=LOCAL_UPDATE_IDEMPOTENT)
 async def next_synthesis(
     project: ProjectName = None,
     run_id: Annotated[RunId | None, Field(description="Only entities from this run's articles")] = None,
@@ -421,7 +427,7 @@ async def next_synthesis(
     return await _run(pick)
 
 
-@mcp.tool(annotations=LOCAL)
+@mcp.tool(annotations=LOCAL_UPDATE)
 async def record_synthesis(
     entity_id: int,
     input_digest: str,
@@ -451,7 +457,7 @@ async def record_synthesis(
     )
 
 
-@mcp.tool(annotations=LOCAL)
+@mcp.tool(annotations=LOCAL_UPDATE_IDEMPOTENT)
 async def export_wiki(project: ProjectName = None) -> dict[str, Any]:
     """Rewrite every Markdown page of a project's wiki (entities, sources, index, log) from its database."""
     return await _run(lambda: wiki_export.export_wiki(projects.get_project(project)))
@@ -463,7 +469,7 @@ async def list_runs(project: ProjectName = None, limit: Annotated[int, Field(ge=
     return await _run(lambda: runs.list_runs(projects.get_project(project), limit))
 
 
-@mcp.tool(annotations=READ)
+@mcp.tool(annotations=LOCAL_UPDATE_IDEMPOTENT)
 async def get_run_status(run_id: RunId) -> dict[str, Any]:
     """Show a run's progress in every stage and the available next steps."""
 
@@ -498,19 +504,19 @@ async def list_articles(
     return await _run(runs.list_articles, run_id, decision=decision, fetch=fetch_status, wiki=wiki_status, offset=offset, limit=limit)
 
 
-@mcp.tool(annotations=NETWORK)
+@mcp.tool(annotations=NETWORK_UPDATE)
 async def bot_start(project: Annotated[str, Field(description="The bot project named in the job's prompt")]) -> dict[str, Any]:
     """Begin a scheduled bot run: lock the project and search its look-back window for new articles."""
     return await _run(bot.bot_start, project)
 
 
-@mcp.tool(annotations=NETWORK)
+@mcp.tool(annotations=NETWORK_UPDATE)
 async def bot_next(project: Annotated[str, Field(description="The bot project named in the job's prompt")]) -> dict[str, Any]:
     """The next step of a bot run (screen, fetch, wiki tasks or finish); do what its `do` says."""
     return await _run(bot.bot_next, project)
 
 
-@mcp.tool(annotations=LOCAL)
+@mcp.tool(annotations=LOCAL_UPDATE_IDEMPOTENT)
 async def bot_finish(project: Annotated[str, Field(description="The bot project named in the job's prompt")]) -> dict[str, Any]:
     """End a bot run: refresh the wiki, write the update report, and return the message to reply with."""
     return await _run(bot.bot_finish, project)

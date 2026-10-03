@@ -1,5 +1,7 @@
 # med-lit-mcp
 
+[![M8ven Score](https://m8ven.ai/badge/mcp/junhewk/med-lit-mcp)](https://m8ven.ai/mcp/junhewk/med-lit-mcp?s=readme)
+
 med-lit-mcp is an MCP server for medical literature reviews. It takes a review through four deliberate stages, **search → screening → fetch → wiki**, and ends with an evidence-linked wiki you can open in Obsidian.
 
 Your MCP client's model does the reading and writing (screening decisions, entity extraction, syntheses). med-lit-mcp searches the databases, stores everything, checks the model's work against the source text, and exports the wiki. Every screening decision, extracted mention and synthesis citation must be a verbatim quote or a reference to the stored text.

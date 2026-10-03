@@ -131,7 +131,7 @@ class WikiTests(Case):
         self.assertEqual(found[0]["name"], "large language model")
         self.assertEqual(found[0]["source_count"], 2)
 
-    def test_rerecording_a_page_is_idempotent_and_text_changes_reset(self) -> None:
+    def test_rerecording_preserves_graph_counts_and_text_changes_reset(self) -> None:
         payload = [entity("large language model", "Large language models"), entity("chatbot", "The chatbot")]
         rels = [relation("chatbot", "large language model", "The chatbot improved")]
         self.extract("pubmed:1", payload, rels)
@@ -438,6 +438,21 @@ class PageUpdateTests(Case):
             "## Recurring Themes\n\nClinicians checked the output [pubmed:2].\n"
         )
         return wiki.record_synthesis(self.project, context["id"], context["input_digest"], "LLMs.", body, ["support"], [])
+
+    def test_rerecording_a_page_reopens_its_synthesis(self) -> None:
+        saved = self.write_first_page()
+        with database(self.project.db) as conn:
+            before = conn.execute("SELECT stale, version FROM kg_syntheses WHERE entity_id=?", (saved["entity_id"],)).fetchone()
+            self.assertEqual(tuple(before), (0, 1))
+
+        self.extract("pubmed:1", [entity("large language model", "Large language models", role="intervention")])
+
+        with database(self.project.db) as conn:
+            after = conn.execute("SELECT stale, version FROM kg_syntheses WHERE entity_id=?", (saved["entity_id"],)).fetchone()
+            self.assertEqual(tuple(after), (1, 1))
+        context = wiki.next_synthesis(self.project, self.run_id)
+        self.assertEqual(context["mode"], "update")
+        self.assertEqual([mention["uid"] for mention in context["mentions"]], ["pubmed:1"])
 
     def test_new_evidence_updates_only_the_changed_sections(self) -> None:
         self.write_first_page()

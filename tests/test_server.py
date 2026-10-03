@@ -14,6 +14,7 @@ from helpers import QUESTION, RECORD, Case
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.shared.memory import create_connected_server_and_client_session
+from mcp.types import ListToolsResult
 from test_search import FakeProcess
 
 from med_lit_mcp import fetch, search
@@ -23,6 +24,16 @@ from med_lit_mcp.server import mcp
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def assert_complete_annotations(test: unittest.TestCase, result: ListToolsResult) -> None:
+    for tool in result.model_dump(mode="json", exclude_none=True)["tools"]:
+        annotations = tool.get("annotations", {})
+        for hint in ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"):
+            test.assertIs(type(annotations.get(hint)), bool, f"{tool['name']}.{hint}")
+        if annotations["readOnlyHint"]:
+            test.assertFalse(annotations["destructiveHint"], tool["name"])
+            test.assertTrue(annotations["idempotentHint"], tool["name"])
+
+
 def structured(result: Any) -> Any:
     assert not result.isError, result.content[0].text
     value = result.structuredContent
@@ -30,9 +41,26 @@ def structured(result: Any) -> Any:
 
 
 class ServerToolTests(Case, unittest.IsolatedAsyncioTestCase):
+    async def test_query_annotations_include_lazy_database_creation(self) -> None:
+        self.assertFalse(self.project.db.exists())
+        async with create_connected_server_and_client_session(mcp._mcp_server) as client:
+            listed = await client.list_tools()
+            assert_complete_annotations(self, listed)
+            tools = {tool.name: tool for tool in listed.tools}
+            for name in ("get_article_page", "find_entities", "list_duplicate_candidates", "get_run_status"):
+                self.assertFalse(tools[name].annotations.readOnlyHint, name)
+                self.assertTrue(tools[name].annotations.destructiveHint, name)
+                self.assertTrue(tools[name].annotations.idempotentHint, name)
+                self.assertFalse(tools[name].annotations.openWorldHint, name)
+            result = structured(await client.call_tool("find_entities", {"query": "chatbot"}))
+        self.assertEqual(result, [])
+        self.assertTrue(self.project.db.is_file())
+
     async def test_full_workflow_through_mcp_tools(self) -> None:
         async with create_connected_server_and_client_session(mcp._mcp_server) as client:
-            tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+            listed = await client.list_tools()
+            assert_complete_annotations(self, listed)
+            tools = {tool.name: tool for tool in listed.tools}
             self.assertEqual(len(tools), 31)
             self.assertIn("semantic-scholar", json.dumps(tools["validate_question"].inputSchema))
             self.assertNotIn("components", json.dumps(tools["start_search"].inputSchema))
@@ -42,7 +70,16 @@ class ServerToolTests(Case, unittest.IsolatedAsyncioTestCase):
             self.assertEqual([name for name in tools if name not in findable], [])
             ontology = await client.call_tool("guide", {"topic": "ontology"})
             self.assertIn("CONDITION", ontology.content[0].text)
-            self.assertTrue(tools["validate_question"].annotations.readOnlyHint)
+            self.assertFalse(tools["validate_question"].annotations.readOnlyHint)
+            self.assertFalse(tools["validate_question"].annotations.idempotentHint)
+            self.assertFalse(tools["wiki_tasks"].annotations.readOnlyHint)
+            self.assertFalse(tools["record_extraction"].annotations.idempotentHint)
+            self.assertTrue(tools["record_extraction"].annotations.destructiveHint)
+            self.assertTrue(tools["export_wiki"].annotations.destructiveHint)
+            self.assertTrue(tools["export_wiki"].annotations.idempotentHint)
+            self.assertTrue(tools["start_search"].annotations.openWorldHint)
+            self.assertFalse(tools["start_search"].annotations.destructiveHint)
+            self.assertTrue(tools["resume_search"].annotations.destructiveHint)
 
             bad = await client.call_tool("validate_question", {"question": {**QUESTION, "framework": "SPIDER"}})
             self.assertTrue(bad.isError)
@@ -134,7 +171,9 @@ class StdioTests(unittest.IsolatedAsyncioTestCase):
             async with stdio_client(params) as (read, write), ClientSession(read, write) as client:
                 initialized = await client.initialize()
                 self.assertIn("search -> screening -> fetch -> wiki", initialized.instructions)
-                self.assertEqual(len((await client.list_tools()).tools), 31)
+                listed = await client.list_tools()
+                assert_complete_annotations(self, listed)
+                self.assertEqual(len(listed.tools), 31)
                 result = await client.call_tool("list_projects", {})
                 self.assertFalse(result.isError)
 
@@ -148,7 +187,9 @@ class StdioTests(unittest.IsolatedAsyncioTestCase):
             )
             async with stdio_client(params) as (read, write), ClientSession(read, write) as client:
                 await client.initialize()
-                names = {tool.name for tool in (await client.list_tools()).tools}
+                listed = await client.list_tools()
+                assert_complete_annotations(self, listed)
+                names = {tool.name for tool in listed.tools}
                 prompts = {prompt.name for prompt in (await client.list_prompts()).prompts}
         self.assertEqual(len(names), 17)
         self.assertIn("create_project", names)
