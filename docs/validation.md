@@ -32,15 +32,22 @@ The Windows builder emits only the batch and checksum manifest; its CRLF format 
 
 Cleanup removed the setup-plugin artifact, Mac script launcher, mixed platform builder/tests and overlapping living support docs. Launcher behavior is preserved; product text uses `med-lit`, and wheel validation is shared between setup and the Mac builder. CI uses the full three-platform matrix once, then builds release assets.
 
+## 0.1.8 release checks
+
+Release commit `1ebb68e` passed the local Linux suite (231 tests, 8 skips) and the signing Mac's suite (232 tests, 7 skips), both with 34 subtests. [Release CI](https://github.com/junhewk/med-lit-mcp/actions/runs/37109879447) passed on Linux (230 tests, 9 skips), macOS (231 tests, 8 skips) and Windows (233 tests, 6 skips), each with 34 subtests, then published PyPI and attached the Windows and Claude Desktop assets.
+
+An isolated installation of the published PyPI 0.1.8 package exposed all 31 tools with four explicit boolean annotations. The public Windows and Mac downloads matched their published SHA-256 manifests. The Windows launcher and Claude bundle both pin `med-lit-mcp==0.1.8`.
+
 ## Current Mac build
 
-The released `med-lit-macos-0.1.7.dmg` was built on the signing Mac from release commit `f543c7d`; the launcher and build scripts are unchanged since 0.1.6:
+The released `med-lit-macos-0.1.8.dmg` was built on the signing Mac from release commit `1ebb68e`; the launcher and build scripts are unchanged since 0.1.6:
 
-- SHA-256: `3e67e3fae0b0a8d655ce5a121c9693710caf8c626e752f11183760a3ed9da33c`.
-- Apple submission: `0ca51262-2f9b-4768-8737-8c92a094f1ac`, **Accepted**.
-- Developer ID signature, stapling, ticket validation and Gatekeeper assessment passed. The bundled wheel is `med_lit_mcp-0.1.7` built from that commit; the native macOS suite passed on it (230 tests).
+- SHA-256: `9e38cc449a754436ef11a5e866541fdf245f108279e19ee222ea581f92c0d459`.
+- Apple submission: `c0e4dcaa-95b8-40e6-86ca-61cc0158cd49`, **Accepted**.
+- Developer ID signature, stapling, ticket validation and Gatekeeper assessment passed. The bundled wheel is `med_lit_mcp-0.1.8` built from that commit; the native macOS source suite passed (232 tests, 7 platform skips and 34 subtests).
+- The final DMG was mounted read-only and its app signature and universal arm64/x86_64 launcher were checked. The bundled wheel's hash matched its manifest. An isolated installation of that wheel reported version 0.1.8 and all 31 MCP tools with four explicit boolean annotations.
 - Desktop launch evidence comes from the previous build of the same launcher (SHA-256 `7ab8ccc9…4b7617`, submission `4a7858db-bf58-42f8-83df-7c650b5d3485`): Chrome downloaded the exact DMG with quarantine intact. Normal Finder launch showed Apple's trusted Open prompt; isolated browser and native Ready passed. After closing and ejecting the DMG, the exact registered persistent-wheel command connected with **31 tools, exit 0**. Setup ports and the owned download server closed; existing settings remained unchanged. Its evidence directory on the Mac is `/tmp/med-lit-native-consolidated-final`.
-- A copy of the DMG, checksum and notarization report is in the Linux checkout's ignored `dist-macos/` directory.
+- A copy of the DMG, checksum and notarization report is in the Linux checkout's ignored `dist-macos/v0.1.8/` directory.
 
 ## Release gates
 
