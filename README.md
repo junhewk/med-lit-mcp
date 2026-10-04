@@ -1,6 +1,10 @@
 # med-lit-mcp
 
 [![M8ven Score](https://m8ven.ai/badge/mcp/junhewk/med-lit-mcp)](https://m8ven.ai/mcp/junhewk/med-lit-mcp?s=readme)
+[![PyPI](https://img.shields.io/pypi/v/med-lit-mcp)](https://pypi.org/project/med-lit-mcp/)
+[![Python](https://img.shields.io/badge/python-%3E%3D3.11-blue?logo=python)](https://pypi.org/project/med-lit-mcp/)
+[![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue)](LICENSE)
+[![Publish](https://github.com/junhewk/med-lit-mcp/actions/workflows/publish.yml/badge.svg)](https://github.com/junhewk/med-lit-mcp/actions/workflows/publish.yml)
 
 med-lit-mcp is an MCP server for medical literature reviews. It takes a review through four deliberate stages, **search → screening → fetch → wiki**, and ends with an evidence-linked wiki you can open in Obsidian.
 
