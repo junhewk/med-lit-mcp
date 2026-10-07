@@ -444,9 +444,17 @@ class MeshResolver:
         return warnings
 
     async def resolve(self, candidate: str) -> str | None:
+        # The exact phrase finds headings and entry terms. A near miss such as "History Taking"
+        # (heading "Medical History Taking") finds nothing that way, so fall back to a plain search,
+        # whose hits must pass the same overlap check.
+        return await self._resolve(candidate, f'"{candidate}"[MeSH Terms]') or await self._resolve(
+            candidate, candidate
+        )
+
+    async def _resolve(self, candidate: str, term: str) -> str | None:
         params = {
             "db": "mesh",
-            "term": f'"{candidate}"[MeSH Terms]',
+            "term": term,
             "retmode": "json",
             "retmax": 3,
             "tool": "med-lit-mcp",

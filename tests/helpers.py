@@ -52,6 +52,8 @@ class Case(unittest.TestCase):
             MED_LIT_PROJECTS_DIR=str(self.root / "projects"),
             NCBI_EMAIL="tester@example.org",
             CODEX_HOME=str(self.root / "codex"),
+            # Setup also looks for Hermes Desktop's launchers under the home folder; never the real one.
+            HOME=str(self.root / "home"),
         )
         patcher = patch.dict(os.environ, env, clear=True)
         patcher.start()
@@ -64,6 +66,10 @@ class Case(unittest.TestCase):
         lookup = patch("med_lit_mcp.search.find_identifiers", return_value=(None, "no DOI or PMID found in PubMed or Crossref"))
         lookup.start()
         self.addCleanup(lookup.stop)
+        # Nor do MeSH checks during validation: every suggested heading is taken as valid.
+        mesh = patch("med_lit_mcp.search._resolve_mesh", side_effect=lambda candidates: {c: c for c in candidates})
+        mesh.start()
+        self.addCleanup(mesh.stop)
         self.addCleanup(unpaywall.stop)
 
     def make_run(

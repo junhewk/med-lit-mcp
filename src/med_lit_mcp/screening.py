@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+from . import triage
 from .matching import contains_verbatim
 from .projects import run_dir
 from .runs import summary
@@ -11,6 +13,10 @@ from .store import locked_run, now, save_run
 
 VALID_DECISIONS = ("include", "exclude", "uncertain")
 ABSTRACT_LIMIT = 6000
+# Clients cap one tool result: Hermes moves an MCP result over 50,000 characters to a file and shows the
+# model only a pointer (a 25-item batch measured 60,716). A batch therefore stops at this many characters
+# of titles and abstracts, however many items were asked for.
+BATCH_CHARS = 20_000
 MAX_CORRECTIONS = 1
 INSTRUCTIONS = (
     "Screen each item using only its title and abstract against the criteria. A clear inclusion "
@@ -120,53 +126,133 @@ def set_criteria(
         }
 
 
-def next_batch(run_id: str, batch_size: int = 10) -> dict[str, Any]:
+def _pending(manifest: dict[str, Any], revision: int) -> tuple[list[str], bool]:
+    """Unscreened articles; one with no title or abstract is marked uncertain for the researcher instead."""
+    pending, changed = [], False
+    for uid, item in manifest["articles"].items():
+        if (item.get("screening") or {}).get("revision") == revision:
+            continue
+        record = item["record"]
+        if not str(record.get("title") or "").strip() and not str(record.get("abstract") or "").strip():
+            item["screening"] = {
+                "decision": "uncertain",
+                "reason": "Search result has no title or abstract; review required",
+                "evidence": "",
+                "revision": revision,
+                "method": "system",
+                "reviewed_at": now(),
+            }
+            changed = True
+            continue
+        pending.append(uid)
+    return pending, changed
+
+
+def _session_left(manifest: dict[str, Any], revision: int, pending: list[str]) -> list[str] | None:
+    """Unscreened articles of the current session, or None when no session is open at this revision."""
+    session = manifest.get("screening_round")
+    if not session or session.get("revision") != revision:
+        return None
+    waiting = set(pending)
+    return [uid for uid in session["uids"] if uid in waiting]
+
+
+def open_session(manifest: dict[str, Any], revision: int, pending: list[str], key: str | None = None) -> bool:
+    """Start a session with the best-triaged SESSION_SIZE unscreened articles; False when triage must come first."""
+    if triage.needed(manifest):
+        return False
+    ordered = sorted(pending, key=lambda uid: triage.order_key(manifest["articles"][uid], revision))
+    manifest["screening_round"] = {
+        "revision": revision, "uids": ordered[: triage.SESSION_SIZE], "started_at": now(), "key": key,
+    }
+    return True
+
+
+def prepare_session(path: Path, key: str) -> dict[str, Any]:
+    """Open the session of one bot run (key) if it has none; reports whether triage must come first."""
+    with locked_run(path) as manifest:
+        revision = manifest.get("selection_revision")
+        pending, changed = _pending(manifest, revision)
+        left = _session_left(manifest, revision, pending)
+        needs_triage = False
+        if pending and (left is None or (manifest.get("screening_round") or {}).get("key") != key):
+            if open_session(manifest, revision, pending, key):
+                changed = True
+                left = _session_left(manifest, revision, pending)
+            else:
+                needs_triage = True
+        if changed:
+            save_run(path, manifest)
+        return {"triage": needs_triage, "pending": len(pending), "left": len(left or [])}
+
+
+def next_batch(run_id: str, batch_size: int = 10, *, new_round: bool = False) -> dict[str, Any]:
     path = run_dir(run_id)
     with locked_run(path) as manifest:
         revision = manifest.get("selection_revision")
         if revision is None:
             raise ValueError("Set screening criteria first with set_screening_criteria")
-        items, changed = [], requeue_vague(manifest) > 0
-        pending = 0
-        for uid, item in manifest["articles"].items():
-            if (item.get("screening") or {}).get("revision") == revision:
-                continue
-            record = item["record"]
+        changed = requeue_vague(manifest) > 0
+        pending, marked = _pending(manifest, revision)
+        changed |= marked
+        left = _session_left(manifest, revision, pending)
+        base = {"run_id": run_id, "revision": revision, "criteria": manifest["selection_criteria"]}
+        if pending and not left:
+            if left is not None and not new_round:
+                if changed:
+                    save_run(path, manifest)
+                return base | {
+                    "items": [],
+                    "remaining": len(pending),
+                    "session_complete": True,
+                    "message": (
+                        f"This session's {len(manifest['screening_round']['uids'])} articles are screened. Report "
+                        f"them to the researcher and stop; {len(pending)} articles wait for later sessions, which "
+                        "start with next_screening_batch(new_round=true) when the researcher asks."
+                    ),
+                }
+            if not open_session(manifest, revision, pending):
+                if changed:
+                    save_run(path, manifest)
+                return base | {
+                    "items": [],
+                    "remaining": len(pending),
+                    "triage_needed": True,
+                    "message": (
+                        f"{len(pending)} articles wait and a session screens {triage.SESSION_SIZE}: rank them first. "
+                        "Repeat next_triage_batch and record_triage_scores until remaining is 0, then call "
+                        "next_screening_batch again."
+                    ),
+                }
+            changed = True
+            left = _session_left(manifest, revision, pending) or []
+        items, size = [], 0
+        for uid in (left or [])[:batch_size]:
+            record = manifest["articles"][uid]["record"]
             title = str(record.get("title") or "").strip()
             abstract = str(record.get("abstract") or "").strip()
-            if not title and not abstract:
-                item["screening"] = {
-                    "decision": "uncertain",
-                    "reason": "Search result has no title or abstract; review required",
-                    "evidence": "",
-                    "revision": revision,
-                    "method": "system",
-                    "reviewed_at": now(),
+            length = len(title) + min(len(abstract), ABSTRACT_LIMIT)
+            if items and size + length > BATCH_CHARS:
+                break
+            size += length
+            items.append(
+                {
+                    "uid": uid,
+                    "title": title,
+                    "abstract": abstract[:ABSTRACT_LIMIT],
+                    "abstract_truncated": len(abstract) > ABSTRACT_LIMIT,
+                    "journal": record.get("journal"),
+                    "year": str(record.get("publication_date") or "")[:4] or None,
+                    "publication_types": record.get("publication_types") or [],
                 }
-                changed = True
-                continue
-            pending += 1
-            if len(items) < batch_size:
-                items.append(
-                    {
-                        "uid": uid,
-                        "title": title,
-                        "abstract": abstract[:ABSTRACT_LIMIT],
-                        "abstract_truncated": len(abstract) > ABSTRACT_LIMIT,
-                        "journal": record.get("journal"),
-                        "year": str(record.get("publication_date") or "")[:4] or None,
-                        "publication_types": record.get("publication_types") or [],
-                    }
-                )
+            )
         if changed:
             save_run(path, manifest)
-        return {
-            "run_id": run_id,
-            "revision": revision,
-            "criteria": manifest["selection_criteria"],
+        return base | {
             "instructions": INSTRUCTIONS,
             "items": items,
-            "remaining": pending,
+            "session_left": len(left or []),
+            "remaining": len(pending),
         }
 
 
@@ -225,9 +311,12 @@ def record_decisions(
             recorded.append(uid)
         save_run(path, manifest)
         result = summary(manifest)
+        left = _session_left(manifest, revision, [u for u, i in manifest["articles"].items()
+                                                  if (i.get("screening") or {}).get("revision") != revision])
         return {
             "run_id": run_id,
             "revision": revision,
+            "session_left": len(left) if left is not None else None,
             "recorded": len(recorded),
             "downgraded": downgraded,
             "rejected": rejected,

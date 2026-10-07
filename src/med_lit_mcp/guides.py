@@ -27,8 +27,9 @@ within a stage, repeat its batch tool while remaining > 0, then report and stop.
    normalized question, sources, date range and warnings, wait for approval, then
    start_search(question_id). If it reports running, resume_search(run_id).
    resume_search(run_id, retry_failed_sources=true) later retries sources that failed.
-3. Screening (guide "screening"): set_screening_criteria, then next_screening_batch and
-   record_screening_decisions until remaining is 0. review_article only for the researcher's own decision.
+3. Screening (guide "screening"): set_screening_criteria; triage the titles when asked
+   (next_triage_batch, record_triage_scores); then next_screening_batch and record_screening_decisions,
+   20 articles per session. review_article only for the researcher's own decision.
 4. Fetch (guide "fetch"): fetch_articles until remaining is 0.
 5. Wiki (guide "wiki"): call wiki_tasks and follow it; export_wiki at the end.
 
@@ -41,16 +42,33 @@ non-zero records_filtered_by_source. A retrieved and screened set is not a compl
 - Framework: PICO when an intervention or exposure is central (population and intervention
   required; comparison and outcome optional). PCC for scoping questions (population and concept
   required; context optional).
-- Keep the researcher's own words in `question` and in each group's `text`.
+- Keep the researcher's own words in `question`. A group's `text` and synonyms are search terms:
+  each is matched as an exact phrase in titles and abstracts, so write each as papers write it,
+  in a few words ("history-taking", not "student interviews (history-taking, OSCE ...)").
+  validate_question rejects sentence-like terms (more than 6 words, "or", brackets).
 - Groups inside a component are ANDed; a group's text and synonyms are ORed.
-  - Put alternatives (patients OR clinicians) in one group's synonyms.
-  - Give each separately required facet its own group (technology AND task).
-- Synonyms: only truly interchangeable terms and spelling variants. Leave out ambiguous bare
-  acronyms (LLM, SDM, GPT) unless the researcher supplied or approved them.
+  - Give each separately required facet its own group: "LLMs that conduct student interviews" is
+    two groups, technology AND interview task. A facet merged into another group's text is lost.
+  - Put only alternatives for the same facet in one group (patients OR clinicians).
+- Population: name it as precisely as the question allows, one group per facet: the condition
+  (type 2 diabetes), the role (medical students), and an age only when the question is about that
+  age. Never put an age beside a condition in one group; validate_question moves it to an age group
+  of its own. An age group misses studies that do not state the age, so when "adults" only rules
+  out children, leave it to the screening criteria. Words like "patients" or "people" barely
+  narrow a search; use them only as true alternatives.
+- Synonyms: only terms that name the same thing, and spelling variants. A broader or neighbouring
+  concept is not a synonym ("decision support" for shared decision-making, "resident" for medical
+  students). Leave out ambiguous bare acronyms (LLM, SDM, GPT) unless the researcher supplied or
+  approved them.
+- Required groups decide what is retrieved. Study design and outcome-type words (experience,
+  perceptions, effectiveness, qualitative) miss papers that use other words: put them in an
+  optional component (outcome or context) or in the screening criteria, not in a required group.
 - PCC context is only for the setting (care setting, geography, education setting), never a spare
   topical facet. Optional components (comparison, outcome, context) narrow only the precision variant.
-- candidate_mesh: suggest MeSH headings such as "Decision Making, Shared"; they are checked against
-  NCBI before use.
+- candidate_mesh: suggest MeSH headings for every group, such as "Decision Making, Shared".
+  validate_question checks them against NCBI: a near miss is corrected to the real heading, an
+  unknown one is removed. A group without one is matched in PubMed by its words only.
+- Show the researcher the repairs and warnings validate_question returns with the question.
 - Filters: add only restrictions the researcher asked for. Without filters.from_date the search
   covers only the last three years; validate_question states the effective start date.
 - Sources: leave sources out unless the researcher names some. The default is pubmed, pmc and
@@ -70,6 +88,15 @@ non-zero records_filtered_by_source. A retrieved and screened set is not a compl
     "screening": """\
 # Screening titles and abstracts
 
+- Screening goes 20 articles per session, best first. When more than 20 wait, next_screening_batch
+  asks for triage: repeat next_triage_batch and record_triage_scores until remaining is 0, scoring
+  each title alone 0-3 (3 clearly meets the criteria, 2 probably, 1 related but probably not,
+  0 unrelated). Judge what the study is about, not shared words: a study that only uses the
+  intervention as a measuring tool is unrelated to a question about the intervention.
+- A session holds the 20 best-triaged articles (search rank breaks ties). Repeat next_screening_batch
+  and record_screening_decisions until it reports the session complete, then report to the
+  researcher and stop. Start the next session with next_screening_batch(new_round=true) only when
+  the researcher asks; fetch waits until every article is screened.
 - Judge each item against the saved criteria using only its title and abstract.
 - include: clearly meets the inclusion criteria. exclude: clearly meets an exclusion criterion.
   uncertain: missing or ambiguous information. Never infer facts that are not in the record.

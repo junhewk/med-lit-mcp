@@ -2,10 +2,11 @@
 
 A bot project has one standing run that every scheduled run adds to. One scheduled run is:
 
-    bot_start   lock the project and search the look-back window into the standing run
-                (only articles new to it, at most bot.max_new_articles, best-ranked first)
-    bot_next    the next piece of work for the agent: screen, fetch or wiki tasks, until the
-                run's capped work is done
+    bot_start   lock the project and search the look-back window; articles new to the standing
+                run wait as candidates
+    bot_next    the next piece of work for the agent: triage the candidates' titles (the best-scored
+                bot.max_new_articles, at most 20, are kept), screen them, fetch, wiki tasks, until
+                the run's capped work is done
     bot_finish  refresh the wiki, write updates/<date>.md and release the lock; the returned
                 message is the run's report, or [SILENT] when nothing happened
 
@@ -25,7 +26,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from . import screening, search, wiki
+from . import screening, search, triage, wiki
 from .projects import Project, create_project, get_project, new_run_dir
 from .platforms import process_alive
 from .runs import is_eligible
@@ -66,6 +67,7 @@ def cron_prompt(name: str) -> str:
         "Keep calling tools until bot_finish: never end your reply before it, and never reply with a plan or "
         "a note to yourself. If you cannot go on (a tool keeps failing), reply with [CRON_FAILURE] on the "
         "first line, then say why.\n"
+        "Triage: score each title alone 0-3 by what the study is about, not by shared words. "
         "Screening: judge only the title and abstract against the criteria; include and exclude need a "
         "verbatim quote as evidence; when unsure choose uncertain, and the researcher will decide."
     )
@@ -152,10 +154,11 @@ def create_bot(
     if "europepmc" in sources:
         raise ValueError("Bots cannot search europepmc; choose pubmed, pmc, openalex, semantic-scholar or scopus")
     include, exclude = screening.normalize_criteria(criteria.get("include", []), criteria.get("exclude", [])).values()
+    search.validate_question(question, sources, repair_sentences=True)  # a rejected question creates nothing
     project = create_project(name, path, mode="bot")
     if changes:
         write_settings(project.root, apply_changes(load_settings(project.root), changes))
-    checked = search.validate_question(question, sources, project)
+    checked = search.validate_question(question, sources, project, repair_sentences=True)
     run_id, run_path = new_run_dir(project)
     atomic_json(run_path / "question.json", checked["normalized_question"])
     config = load_settings(project.root).search
@@ -267,7 +270,7 @@ def bot_start(name: str | None) -> dict[str, Any]:
             settings.search.sources or current["sources"],
             from_date=from_date.isoformat(),
             per_source=settings.search.per_source,
-            cap=settings.bot.max_new_articles,
+            cap=min(settings.bot.max_new_articles, triage.SESSION_SIZE),
             wait_seconds=SEARCH_WAIT,
         )
         with _state(project) as state:
@@ -352,20 +355,42 @@ def bot_next(name: str | None) -> dict[str, Any]:
             save_run(path, manifest)
     if running and search._wait(path, SEARCH_WAIT)["search_status"] == "running":
         return {"step": "wait", "do": f"The search is still running; call bot_next(project={project.name!r}) again."}
-    manifest = read_json(path / RUN_FILE)
-    revision = manifest.get("selection_revision")
-    pending = sum((item.get("screening") or {}).get("revision") != revision for item in manifest["articles"].values())
-    if pending:
+    cap = min(settings.bot.max_new_articles, triage.SESSION_SIZE)
+    triage_step = {
+        "step": "triage",
+        "run_id": run_id,
+        "do": (
+            f"Call next_triage_batch(run_id='{run_id}'), score every title 0-3 as it says, and call "
+            f"record_triage_scores(run_id='{run_id}', revision=<its revision>, scores=[...]). Repeat until "
+            f"remaining is 0, then call bot_next(project={project.name!r})."
+        ),
+    }
+    with locked_run(path) as manifest:
+        if manifest.get("candidates"):
+            if triage.needed(manifest, cap):
+                return triage_step | {"candidates": len(manifest["candidates"]), "keep": cap}
+            triage.select_candidates(manifest, cap)
+            save_run(path, manifest)
+    session = screening.prepare_session(path, active["started_at"])
+    if session["triage"]:
+        return triage_step | {"pending": session["pending"]}
+    if session["left"]:
         return {
             "step": "screen",
             "run_id": run_id,
-            "pending": pending,
+            "pending": session["left"],
             "do": (
                 f"Call next_screening_batch(run_id='{run_id}') and record_screening_decisions(run_id='{run_id}', "
-                "revision=<its revision>, decisions=[...]) for its items. Repeat until remaining is 0, then "
-                f"call bot_next(project={project.name!r})."
+                "revision=<its revision>, decisions=[...]) for its items. Repeat until it reports the session "
+                f"complete, then call bot_next(project={project.name!r})."
             ),
         }
+    if session["pending"]:
+        return _finish_step(
+            project, f"this run's articles are screened; {session['pending']} more wait for the next runs"
+        )
+    manifest = read_json(path / RUN_FILE)
+    revision = manifest.get("selection_revision")
     withdrawn = _withdraw_excluded(project, path, settings.wiki.min_sources)
     if withdrawn:
         with _state(project) as fresh:
@@ -596,7 +621,7 @@ def set_question(project: Project, question: dict[str, Any], sources: list[str])
     """A new question version; the next run backfills from the bot's start date with it."""
     if "europepmc" in sources:
         raise ValueError("Bots cannot search europepmc")
-    checked = search.validate_question(question, sources, project)
+    checked = search.validate_question(question, sources, project, repair_sentences=True)
     settings = load_settings(project.root)
     assert settings.bot is not None
     with _state(project) as state:

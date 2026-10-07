@@ -57,6 +57,11 @@ class ResearchQuestion(Strict):
     filters: Filters = Field(default_factory=Filters, description="Only what the researcher asked for")
 
 
+class TriageScore(Strict):
+    uid: str
+    score: int = Field(ge=0, le=3, description="3 clearly meets the criteria, 2 probably, 1 related but probably not, 0 unrelated")
+
+
 class ScreeningDecision(Strict):
     uid: str
     decision: Literal["include", "exclude", "uncertain"]

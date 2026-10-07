@@ -172,3 +172,30 @@ def test_ranking_as_of_date_drives_recency_not_the_wall_clock() -> None:
     late = rank_records([record()], question(), today=date(2026, 1, 1))
     assert early[0]["ranking"]["recency_score"] > late[0]["ranking"]["recency_score"]
     assert early[0]["ranking"]["composite_score"] != late[0]["ranking"]["composite_score"]
+
+
+def test_partial_matches_ignore_words_shared_with_other_components() -> None:
+    compared = Question.from_dict(
+        {
+            "schema_version": "1",
+            "framework": "PICO",
+            "question": "CGM versus capillary testing",
+            "components": {
+                "population": {"text": "type 2 diabetes"},
+                "intervention": {"text": "continuous glucose monitoring"},
+                "comparison": {"text": "capillary glucose monitoring"},
+                "outcome": {"text": "HbA1c"},
+            },
+        }
+    )
+    cgm_only = record(title="Continuous glucose monitoring in type 2 diabetes", abstract="HbA1c fell.")
+    with_comparator = record(
+        title="Continuous glucose monitoring in type 2 diabetes",
+        abstract="Compared with capillary testing, HbA1c fell.",
+    )
+    ranked = {
+        item["title"] + item["abstract"]: item["ranking"]["group_relevance"]
+        for item in rank_records([cgm_only, with_comparator], compared, today=date(2026, 1, 1))
+    }
+    assert ranked[cgm_only["title"] + cgm_only["abstract"]]["comparison.comparison"] == 0.0
+    assert ranked[with_comparator["title"] + with_comparator["abstract"]]["comparison.comparison"] == 1.0

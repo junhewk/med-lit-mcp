@@ -70,7 +70,8 @@ class SearchTests(Case):
         dated = {**QUESTION, "filters": {"from_date": "2015-01-01"}}
         with patch.dict(os.environ, {"S2_API_KEY": "key"}):
             keyed = search.validate_question(dated)
-        self.assertEqual((keyed["sources"][-1], keyed["warnings"]), ("semantic-scholar", []))
+        self.assertEqual(keyed["sources"][-1], "semantic-scholar")
+        self.assertFalse([w for w in keyed["warnings"] if "semantic-scholar" in w or "from_date" in w])
         self.assertIn("429", warnings(QUESTION, ["semantic-scholar"]))
         self.assertIn("SCOPUS_API_KEY", warnings(QUESTION, ["scopus"]))
         with patch.dict(os.environ, {"SCOPUS_API_KEY": "key"}):
@@ -83,6 +84,43 @@ class SearchTests(Case):
         bad = {**QUESTION, "filters": {"from_date": "2026-01-01", "to_date": "2020-01-01"}}
         with self.assertRaisesRegex(ValueError, "Question rejected"):
             search.validate_question(bad)
+
+    def test_validate_question_rejects_sentences_and_repairs_misplaced_ages(self) -> None:
+        def with_population(*groups: dict[str, Any]) -> dict[str, Any]:
+            return {**QUESTION, "components": {**QUESTION["components"], "population": {"groups": list(groups)}}}
+
+        sentence = with_population({"text": "medical or health-professions students and trainees"})
+        with self.assertRaisesRegex(ValueError, "Sentence-like: population/.*medical or health-professions"):
+            search.validate_question(sentence)
+        mixed = search.validate_question(with_population(
+            {"text": "type 2 diabetes", "synonyms": ["T2DM"], "candidate_mesh": ["Diabetes Mellitus, Type 2", "Adult"]}
+        ))
+        groups = mixed["normalized_question"]["components"]["population"]["groups"]
+        self.assertEqual([g["text"] for g in groups], ["type 2 diabetes", "adults"])
+        self.assertEqual((groups[0]["candidate_mesh"], groups[1]["candidate_mesh"]), (["Diabetes Mellitus, Type 2"], ["Adult"]))
+        warnings = "\n".join(mixed["warnings"])
+        self.assertIn("Repaired population/", warnings)
+        self.assertIn("population/age is an age group", warnings)
+        self.assertEqual(search.load_draft(mixed["question_id"])["question"], mixed["normalized_question"])
+        self.assertIn("patients appears in nearly every clinical study", "\n".join(search.validate_question(QUESTION)["warnings"]))
+
+    def test_validate_question_corrects_and_removes_mesh_headings(self) -> None:
+        drafted = {**QUESTION, "components": {**QUESTION["components"], "concept": {"groups": [
+            {"text": "history-taking", "candidate_mesh": ["History Taking", "Standardized Patients"]},
+        ]}}}
+        headings = {"History Taking": "Medical History Taking", "Standardized Patients": None}
+        with patch.object(search, "_resolve_mesh", return_value=headings):
+            result = search.validate_question(drafted)
+        concept = result["normalized_question"]["components"]["concept"]["groups"][0]
+        self.assertEqual(concept["candidate_mesh"], ["Medical History Taking"])
+        warnings = "\n".join(result["warnings"])
+        self.assertIn("'History Taking' is 'Medical History Taking' and was corrected", warnings)
+        self.assertIn("'Standardized Patients' is not a MeSH heading and was removed", warnings)
+        with patch.object(search, "_resolve_mesh", side_effect=search.SourceError("NCBI returned 503")):
+            offline = search.validate_question(drafted)
+        self.assertEqual(offline["normalized_question"]["components"]["concept"]["groups"][0]["candidate_mesh"],
+                         ["History Taking", "Standardized Patients"])
+        self.assertIn("could not be checked now (NCBI returned 503)", "\n".join(offline["warnings"]))
 
     def test_background_search_imports_deduplicated_results(self) -> None:
         with patch.object(search.subprocess, "Popen", side_effect=lambda argv, **kw: FakeProcess(argv, **kw)) as popen:

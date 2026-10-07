@@ -236,9 +236,18 @@ def _relevance_details(
     tokens = _tokens(haystack)
     all_terms = [term for block in question.components.values() for term in _block_terms(block)]
     query_score = _terms_score(all_terms, haystack, tokens)
+    # A partial match counts only words that set a component apart: "capillary glucose monitoring"
+    # must not credit a comparison to every paper that mentions continuous glucose monitoring.
+    component_tokens = {
+        name: {token for term in _block_terms(block) for token in _tokens(term)}
+        for name, block in question.components.items()
+    }
     group_scores = {
         f"{component}.{group.label}": _terms_score(
-            _group_terms(group), haystack, tokens
+            _group_terms(group),
+            haystack,
+            tokens,
+            ignore=set().union(*(words for name, words in component_tokens.items() if name != component)),
         )
         for component, block in question.components.items()
         for group in block.groups
@@ -382,13 +391,17 @@ def _component_score(
     return min(group_scores[f"{component}.{group.label}"] for group in block.groups)
 
 
-def _terms_score(terms: list[str], haystack: str, haystack_tokens: set[str]) -> float:
+def _terms_score(
+    terms: list[str], haystack: str, haystack_tokens: set[str], *, ignore: set[str] | None = None
+) -> float:
+    """Best match among terms: 1.0 for the whole phrase, else the share of its words present.
+    Words in `ignore` do not count towards a partial match."""
     if not terms:
         return 0.5
     scores: list[float] = []
     for term in terms:
         normalized = re.sub(r"\s+", " ", term.casefold()).strip()
-        term_tokens = _tokens(normalized)
+        term_tokens = _tokens(normalized) - (ignore or set())
         if normalized and normalized in haystack:
             scores.append(1.0)
         elif term_tokens:

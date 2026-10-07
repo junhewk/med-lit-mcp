@@ -48,10 +48,27 @@ def server_command(dev: str | None) -> list[str]:
     if dev:
         uv = shutil.which("uv") or "uv"
         return [uv, "run", "--quiet", "--directory", str(Path(dev).expanduser().resolve()), "med-lit-mcp"]
-    uvx = shutil.which("uvx")
+    uvx = shutil.which("uvx") or _hermes_uvx()
     if not uvx:
         raise SystemExit("uvx was not found. Install uv first: https://docs.astral.sh/uv/getting-started/installation/")
     return [uvx, "med-lit-mcp"]
+
+
+def _hermes_uvx() -> str | None:
+    """The uvx Hermes Desktop ships in ~/.hermes/bin, which is not on PATH."""
+    path = Path.home() / ".hermes" / "bin" / "uvx"
+    return str(path) if path.is_file() and os.access(path, os.X_OK) else None
+
+
+def find_hermes() -> str | None:
+    """Hermes on PATH, else the launchers Hermes Desktop installs (its shim, then the agent checkout's)."""
+    found = shutil.which("hermes")
+    if found:
+        return found
+    for path in (Path.home() / ".local/bin/hermes", Path.home() / ".hermes/hermes-agent/.hermes/bin/hermes"):
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path)
+    return None
 
 
 def _run(command: list[str], stdin: str = "", timeout: float | None = 300) -> subprocess.CompletedProcess[str]:
@@ -126,6 +143,14 @@ def ask_defaults(console: Console) -> None:
         section, name = key.split(".")
         values.setdefault(section, {})[name] = value
     path = settings.save_user_defaults("interactive", values)
+    bot = settings.new_settings("bot")
+    while True:
+        try:
+            cap = settings.session_cap(int(console.text("  Articles a Hermes bot screens per run (1-20)", str(bot.bot.max_new_articles))))
+            settings.save_user_defaults("bot", {"bot": {"max_new_articles": cap}})
+            break
+        except ValueError as exc:
+            print(f"  {exc}")
     print(f"  saved to {path}; each review keeps its own copy in med-lit.settings.json")
 
 
@@ -158,7 +183,7 @@ def setup(args: argparse.Namespace, console: Console) -> int:
     if args.no_register:
         print("\nSaved. Skipped client registration (--no-register).")
         return 0
-    found = {"hermes": shutil.which("hermes"), "claude-code": shutil.which("claude"), "codex": shutil.which("codex")}
+    found = {"hermes": find_hermes(), "claude-code": shutil.which("claude"), "codex": shutil.which("codex")}
     wanted = args.client or [name for name, path in found.items() if path]
     command = server_command(args.dev)
     print()

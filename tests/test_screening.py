@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from helpers import RECORD, Case, record
 
-from med_lit_mcp import fetch, screening
+from med_lit_mcp import fetch, screening, triage
 from med_lit_mcp.projects import run_dir
 from med_lit_mcp.store import RUN_FILE, read_json, save_run
 
@@ -108,3 +108,77 @@ class ScreeningTests(Case):
         self.assertEqual(saved["pubmed:123"]["screening_history"][-1]["requeued"], "reason not specific")
         self.assertEqual(saved["pubmed:125"]["screening"]["decision"], "uncertain")
         self.assertEqual(saved["pubmed:124"]["screening"]["method"], "manual")
+
+
+class BatchSizeTests(Case):
+    def test_a_batch_stops_at_its_character_budget(self) -> None:
+        long = "Communication training for medical students. " * 120  # about 5,400 characters
+        run_id = self.make_run([record(n, abstract=long) for n in range(10)], include=False, run_id="b" * 32)
+        screening.set_criteria(run_id, ["communication training"], [])
+        batch = screening.next_batch(run_id, batch_size=10)
+        self.assertEqual((len(batch["items"]), batch["remaining"]), (3, 10))
+        short = self.make_run([record(n) for n in range(10)], include=False, run_id="c" * 32)
+        screening.set_criteria(short, ["communication training"], [])
+        self.assertEqual(len(screening.next_batch(short, batch_size=10)["items"]), 10)
+
+
+class TriageSessionTests(Case):
+    def setUp(self) -> None:
+        super().setUp()
+        self.run_id = self.make_run([record(n, title=f"Study {n}") for n in range(1, 26)], include=False, run_id="d" * 32)
+        self.revision = screening.set_criteria(self.run_id, ["communication training"], [])["revision"]
+
+    def triage_all(self, scores: dict[str, int]) -> None:
+        while True:
+            batch = triage.next_batch(self.run_id)
+            if not batch["items"]:
+                return
+            entries = [{"uid": item["uid"], "score": scores.get(item["uid"], 1)} for item in batch["items"]]
+            triage.record_scores(self.run_id, batch["revision"], entries)
+
+    def decide_all(self, items: list[dict]) -> None:
+        screening.record_decisions(
+            self.run_id, self.revision,
+            [{"uid": i["uid"], "decision": "exclude", "reason": "per criteria", "evidence": i["title"]} for i in items],
+        )
+
+    def test_more_than_a_session_waits_for_triage_then_screens_the_best_twenty(self) -> None:
+        first = screening.next_batch(self.run_id)
+        self.assertEqual((first["items"], first["triage_needed"], first["remaining"]), ([], True, 25))
+        batch = triage.next_batch(self.run_id)
+        self.assertEqual((len(batch["items"]), batch["remaining"], batch["scale"][3]), (25, 25, "clearly meets the criteria"))
+        self.assertIn("communication training", batch["criteria"]["include"])
+        self.triage_all({"pubmed:25": 3, "pubmed:24": 0, "pubmed:3": 2})
+        session: list[str] = []
+        while True:
+            served = screening.next_batch(self.run_id, batch_size=25)
+            if not served["items"]:
+                break
+            session += [item["uid"] for item in served["items"]]
+            self.decide_all(served["items"])
+        self.assertEqual(len(session), 20)
+        self.assertEqual(session[:2], ["pubmed:25", "pubmed:3"])  # best triage scores first, then search rank
+        self.assertNotIn("pubmed:24", session)
+        self.assertTrue(served["session_complete"])
+        self.assertIn("5 articles wait for later sessions", served["message"])
+        later = screening.next_batch(self.run_id, batch_size=25, new_round=True)
+        self.assertEqual(len(later["items"]), 5)
+        self.assertIn("pubmed:24", [item["uid"] for item in later["items"]])
+
+    def test_triage_batches_stop_at_their_character_budget_and_reject_strays(self) -> None:
+        manifest = read_json(run_dir(self.run_id) / RUN_FILE)
+        for item in manifest["articles"].values():
+            item["record"]["title"] = "A long title about communication training " * 40  # about 1,700 characters
+        save_run(run_dir(self.run_id), manifest)
+        batch = triage.next_batch(self.run_id)
+        self.assertEqual((len(batch["items"]), batch["remaining"]), (11, 25))
+        result = triage.record_scores(self.run_id, self.revision, [{"uid": "pubmed:999", "score": 3}])
+        self.assertEqual(result["rejected"][0]["error"], "not waiting for triage")
+        with self.assertRaisesRegex(ValueError, "revision"):
+            triage.record_scores(self.run_id, self.revision + 1, [{"uid": "pubmed:1", "score": 3}])
+
+    def test_new_criteria_need_new_triage(self) -> None:
+        self.triage_all({})
+        self.assertFalse(triage.needed(read_json(run_dir(self.run_id) / RUN_FILE)))
+        screening.set_criteria(self.run_id, ["medical students"], [], replace=True)
+        self.assertTrue(triage.needed(read_json(run_dir(self.run_id) / RUN_FILE)))

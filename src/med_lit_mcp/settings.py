@@ -67,13 +67,25 @@ class WikiSettings(Section):
     )
 
 
+MAX_SESSION = 20  # articles screened per session; a bot's max_new_articles stays within it
+
+
 class BotSettings(Section):
     lookback_days: int = Field(default=90, ge=1, le=3650, description="Publication-date look-back of each run (open-ended to the future)")
-    max_new_articles: int = Field(default=20, ge=1, le=1000, description="New articles screened per run; the rest are dropped and reported")
+    max_new_articles: int = Field(
+        default=5, ge=1, le=20,
+        description="New articles screened per run, 1-20 (one session); the best-triaged are kept, the rest wait for later runs",
+    )
     max_syntheses: int = Field(
         default=100, ge=0, le=1000,
         description="Safety limit on entity pages written or updated in one run; normally every due page is written",
     )
+
+    @field_validator("max_new_articles", mode="before")
+    @classmethod
+    def _one_session(cls, value: Any) -> Any:
+        """Settings saved before the 20-article session limit keep loading, at the limit."""
+        return min(value, MAX_SESSION) if isinstance(value, int) and not isinstance(value, bool) else value
 
 
 class ProjectSettings(Section):
@@ -135,6 +147,13 @@ def _build(mode: str, overrides: dict[str, Any]) -> ProjectSettings:
 def _explain(exc: ValidationError) -> str:
     problems = [f"{'.'.join(str(p) for p in error['loc'])}: {error['msg']}" for error in exc.errors()]
     return "Invalid settings: " + "; ".join(problems)
+
+
+def session_cap(value: int) -> int:
+    """A typed bot cap, refused outside 1-20 (saved files above 20 are clamped on load instead)."""
+    if not 1 <= value <= MAX_SESSION:
+        raise ValueError(f"Choose 1-{MAX_SESSION}: a run screens at most {MAX_SESSION} articles")
+    return value
 
 
 def new_settings(mode: str = "interactive") -> ProjectSettings:

@@ -10,9 +10,9 @@ med-lit-mcp is an MCP server for medical literature reviews. It takes a review t
 
 Your MCP client's model does the reading and writing (screening decisions, entity extraction, syntheses). med-lit-mcp searches the databases, stores everything, checks the model's work against the source text, and exports the wiki. Every screening decision, extracted mention and synthesis citation must be a verbatim quote or a reference to the stored text.
 
-It supports Hermes, Claude Code, Claude Desktop and native Codex MCP connections. ChatGPT desktop Work/Codex has a separate guided installation and settings UI for users who prefer no terminal typing. The server runs on Linux, macOS and Windows; see [compatibility](#compatibility-and-validation) for validation status. It needs no embedding endpoint, no model API key and no build step. The only required setting is a contact email (`NCBI_EMAIL`).
+It supports Hermes (terminal and Hermes Desktop), Claude Code, Claude Desktop and native Codex MCP connections. ChatGPT desktop Work/Codex has a separate guided installation and settings UI for users who prefer no terminal typing. The server runs on Linux, macOS and Windows; see [compatibility](#compatibility-and-validation) for validation status. It needs no embedding endpoint, no model API key and no build step. The only required setting is a contact email (`NCBI_EMAIL`).
 
-With Hermes, a review can also be kept up to date by a **bot**: a scheduled job that re-runs a search you have tried, screens what is new and adds it to the wiki. See [Bots](#bots-keep-a-review-up-to-date-hermes).
+With Hermes, a review can also be kept up to date by a **bot**: a scheduled job that re-runs a search you have tried, screens what is new and adds it to the wiki. In Hermes Desktop the bots appear in Bot Mode, with each run's report in the bot's chat. See [Bots](#bots-keep-a-review-up-to-date-hermes).
 
 ## Install
 
@@ -20,7 +20,7 @@ med-lit-mcp is on [PyPI](https://pypi.org/project/med-lit-mcp/) and runs through
 
 | Client | Installation | Email, folder and keys |
 | --- | --- | --- |
-| Hermes, Claude Code, Codex | CLI `setup` | Terminal prompts |
+| Hermes (terminal or Desktop), Claude Code, Codex | CLI `setup` | Terminal prompts |
 | Claude Desktop | `.mcpb` extension | Claude's settings form |
 | ChatGPT desktop Work/Codex on Windows x64 | `Install med-lit.bat` | Local browser form |
 | ChatGPT desktop Work/Codex on macOS | Signed, notarized `.dmg` | Local browser form |
@@ -31,7 +31,7 @@ med-lit-mcp is on [PyPI](https://pypi.org/project/med-lit-mcp/) and runs through
 uvx med-lit-mcp setup
 ```
 
-Setup asks for your contact email (needed for PubMed and Unpaywall), a folder for your reviews (default `~/med-lit`), optionally API keys, and optionally your default [review settings](#review-settings). Each key is typed with hidden input, tested against its provider right away, and saved in `~/.config/med-lit-mcp/keys.json`, a file only you can read. Setup then registers med-lit with every Hermes, Claude Code and Codex CLI it finds on the machine. Keys never go into the chat or into the clients' configuration files. Codex users use these terminal prompts, just like Hermes users.
+Setup asks for your contact email (needed for PubMed and Unpaywall), a folder for your reviews (default `~/med-lit`), optionally API keys, and optionally your default [review settings](#review-settings), including how many articles a Hermes bot screens per run. Each key is typed with hidden input, tested against its provider right away, and saved in `~/.config/med-lit-mcp/keys.json`, a file only you can read. Setup then registers med-lit with every Hermes, Claude Code and Codex CLI it finds on the machine. Hermes Desktop uses the same Hermes configuration, so this registers it too, even when the Desktop's `hermes` command is not on your `PATH`; start a new chat (or `/reload-mcp`) to load the tools. Hermes Desktop ships its own uv, so without uv of your own you can run `~/.hermes/bin/uvx med-lit-mcp setup`. Either way med-lit runs in its own uv environment, separate from Hermes's Python. Keys never go into the chat or into the clients' configuration files. Codex users use these terminal prompts, just like Hermes users.
 
 Manage keys later without rerunning setup:
 
@@ -200,7 +200,7 @@ Talk to your agent. The server's instructions tell it to start each stage only w
 >
 > **You:** Screen it. Include studies of LLMs supporting patient–clinician decisions; exclude purely technical benchmarks.
 >
-> **Agent:** `set_screening_criteria`, then repeats `next_screening_batch` and `record_screening_decisions`.
+> **Agent:** `set_screening_criteria`; when more than 20 articles wait, scores every title 0–3 (`next_triage_batch`, `record_triage_scores`); then screens the 20 best with `next_screening_batch` and `record_screening_decisions`, and stops to report. The next 20 follow in a later session, when you ask.
 >
 > **You:** Include the uncertain one about decision aids: it describes an LLM-drafted aid.
 >
@@ -219,6 +219,7 @@ How the stages work:
 - **Identifiers.** Every imported article has a DOI, PMID or PMCID: that is how one article is recognised across sources and searches, and how its full text is found. A record that arrives without one (some OpenAlex records, for example) is looked up in PubMed and then Crossref by its title; only the same title, or the same title plus a subtitle, published within a year, counts. Records still without an identifier are excluded and listed in the run's `skipped_no_identifier`; they are looked up again whenever a later search finds them. To include one anyway, ask for it by name ("add the skipped thesis on physiotherapy education"): the agent adds it with `add_skipped_articles`, unless its title matches an article already in the run, and it is then screened like any other.
 - **Repeat searches.** A later search in the same project imports only articles new to the project, matched by DOI, PMID, PMCID or record id across sources. An identical abstract (at least 300 characters, ignoring case, spacing and punctuation) also marks one article: repository versions such as Zenodo or Figshare deposits each carry their own DOI, and an index copy (DOAJ) can sit beside the journal's record under a shorter title. The same matching keeps two copies found by one search from both being imported. Articles an earlier search already found are counted as `already_known` and keep that search's screening decisions and wiki work.
 - **Scopus** returns abstracts and full author lists when your institution subscribes (the COMPLETE view); otherwise it falls back to titles and first authors only.
+- **Triage, then 20 per session.** Screening goes 20 articles per session, best first. When more articles wait, the agent first scores each title alone from 0 (unrelated) to 3 (clearly meets the criteria), judging what the study is about rather than shared words; the search's relevance rank breaks ties. In a test on four reviews, where the same model then screened the abstracts, 17–20 of the top 20 by triage were included, against 6–20 by search rank alone; the largest gain was a qualitative question. Fetch waits until every article is screened.
 - **Screening** uses titles and abstracts only. Include and exclude decisions need a verbatim quote from the record, and an uncertain decision needs a reason naming the criterion that cannot be judged and what the record leaves open. A decision that fails these checks is stored as `uncertain` and can be corrected once; uncertain articles wait for the researcher's own decision. Uncertain decisions recorded before 0.1.4 that give no specific reason are sent back to screening once.
 - **Changing criteria** requires `replace=true`, starts a new revision, and re-screens every article. Earlier decisions stay in the history.
 - **Fetch** tries PMC full text (NCBI, then Europe PMC). For articles without a PMCID it asks [Unpaywall](https://unpaywall.org) for legal open-access copies of the DOI, preferring a PMC copy and otherwise extracting text from an open-access PDF. The abstract is the last resort, and abstract-only articles are always labelled as such. Articles are fetched in search-rank order, so a `fetch.limit` keeps the best-ranked ones. The source, license and version (published, accepted or submitted) of each full text are recorded. To retry abstract-only articles later, ask for a fetch with `retry_abstract_only`.
@@ -247,19 +248,21 @@ uvx med-lit-mcp setup bot
 
 Setup lists the searches that have screening criteria and asks which one to keep running, a name, daily or weekly and at what time, and the per-run limits. It then:
 - creates the bot project, which starts empty and holds only what the bot finds from now on;
-- creates the Hermes profile `medlitbot` once, shared by all bots. It starts as a copy of your current Hermes profile (model included), but its scheduled runs get only the med-lit tools and subagents, and its med-lit server sees only bot projects;
+- creates the Hermes profile `medlitbot` once, shared by all bots. It starts as a copy of your current Hermes profile (model included), but its scheduled runs and its chats get only the med-lit tools and subagents, and its med-lit server sees only bot projects;
 - adds one scheduled job per bot. Several bots are fine; setup suggests start times 30 minutes apart so they do not share your model at once.
+
+**In Hermes Desktop,** the `medlitbot` profile is a Bot in Bot Mode, titled *med-lit bot* (rename or restyle it there; setup leaves your changes alone). All your bots are its **Routines**, named `[bot:medlitbot] <bot name>`, and each keeps its own question, criteria and schedule. Each run's report is posted to the med-lit bot's chat, so you click the Bot to read the latest updates. A silent run posts nothing, and each posted report costs the Bot one model turn. You can ask the Bot about its reviews ("how did SDM watch's last run go?"). Like the scheduled runs, its chat has only the med-lit tools: it cannot change a bot project or decide its uncertain articles, and it cannot message other Bots to do so; do that in a normal Hermes chat. Scheduled runs fire while Hermes Desktop is open or a Hermes gateway runs. Bots created before this support move into Bot Mode the next time you open them with `setup bot --edit`.
 
 To run a bot now instead of waiting for its time, answer yes to setup's last question, or run `hermes -p medlitbot cron run <job id>` (the job id is printed by setup and listed by `hermes -p medlitbot cron list`). Either way the run happens in that terminal and takes as long as a scheduled run, so keep the terminal open until it prints its result.
 
 **Each run:**
-- searches articles published in the look-back window (90 days by default, open-ended because journals date issues ahead) and takes in only articles new to the project: at most `max_new_articles`, best-ranked first. Articles over the cap are not marked as seen, so later runs pick them up while they are still in the window;
+- searches articles published in the look-back window (90 days by default, open-ended because journals date issues ahead) and takes in only articles new to the project. The agent scores their titles 0–3, and the run keeps the best-scored `max_new_articles` (5 by default, at most 20: one screening session), search rank breaking ties. Articles over the cap are not marked as seen, so later runs pick them up while they are still in the window;
 - screens them against the frozen criteria, fetches and extracts the included ones, and writes every entity page these articles make due (entities with at least `wiki.min_sources` source articles): new pages first, then updates with the new evidence. A run's size is therefore set by `max_new_articles`;
 - finishes all the work its articles bring, however long it takes. Two runs of the same bot never overlap. If a run stops before finishing (the agent ends early, or the machine sleeps), the next run continues its unfinished work and its report includes the stopped run's articles, decisions and pages;
 - excludes articles with no DOI, PMID or PMCID and lists them in the report; ask for one in a normal chat to add it;
-- writes a report to `updates/<date>.md` in the project folder and replies with the same text, which Hermes saves under `~/.hermes/profiles/medlitbot/cron/output/<job id>/`. A run that found nothing stays silent and writes no report.
+- writes a report to `updates/<date>.md` in the project folder and replies with the same text, which Hermes posts to the med-lit bot's chat and saves under `~/.hermes/profiles/medlitbot/cron/output/<job id>/`. A run that found nothing stays silent and writes no report.
 
-**Choosing `max_new_articles`.** A run's length follows from its cap, not from the window: the articles it takes in decide how many pages are extracted and how many entity pages fall due. With a local model, a test bot's run of 5 new articles (3 included) took 33 minutes: about 2.5 minutes per extracted article page and about 1 minute per entity page written. A new bot's first window usually holds a backlog: 129 matching articles in the test's 90 days. The cap works through it a run at a time, best-ranked first, and the report lists how many are waiting. A small cap keeps each run short; the few lowest-ranked articles may leave the 90-day window before a run reaches them.
+**Choosing `max_new_articles`.** A run's length follows from its cap, not from the window: the articles it takes in decide how many pages are extracted and how many entity pages fall due. With a local model, a test bot's run of 5 new articles (3 included) took 33 minutes, and a run of 20 (11 included, starting from an empty wiki) took about 2 hours: roughly 3 minutes per extracted article page and 1–2 minutes per entity page written. A new bot's first window usually holds a backlog: 125–129 matching articles in the tests' 90 days. The cap works through it a run at a time, best-triaged first, and the report lists how many are waiting. A small cap keeps each run short; change it with `setup bot --edit`. The few lowest-scored articles may leave the 90-day window before a run reaches them.
 
 **Uncertain articles wait for you.** The bot never decides them; the report lists them with the bot's reasons. Open the bot project in a normal chat ("show the uncertain articles in SDM watch") and decide them with `review_article`; the next run fetches and adds the ones you include.
 
@@ -268,7 +271,7 @@ To run a bot now instead of waiting for its time, answer yes to setup's last que
 | Change | What happens |
 |---|---|
 | Schedule; caps, look-back, records per source | Applies from the next run. |
-| Screening criteria (opens your editor) | A new criteria revision. The next runs re-screen everything collected; articles that become excludes are withdrawn from the wiki, and the entity pages that cited them are updated to drop them. |
+| Screening criteria (opens your editor) | A new criteria revision. The next runs re-screen everything collected, 20 per run; articles that become excludes are withdrawn from the wiki, and the entity pages that cited them are updated to drop them. |
 | Search question (copied from another search, or edited) | A new question version. The next run searches again from the bot's start date with it; known articles are skipped. |
 | Pause or resume | Pauses or resumes the Hermes job. |
 | Archive | Removes the schedule. The folder, wiki, reports and history stay; delete the folder yourself if you no longer want it. |
@@ -278,17 +281,17 @@ Every question and criteria version is kept in `.med-lit/bot.json`. A normal cha
 | Bot setting | Default | Meaning |
 |---|---|---|
 | `bot.lookback_days` | 90 | Publication-date window of each run. |
-| `bot.max_new_articles` | 20 | New articles taken in per run. |
+| `bot.max_new_articles` | 5 | Articles screened per run, 1–20 (one screening session); the best-triaged are kept and the rest wait for later runs. |
 | `bot.max_syntheses` | 100 | Safety limit on entity pages written or updated in one run, for exceptional events such as a criteria change. Normally every due page is written; pages over the limit wait for the next run. |
 | `search.per_source` | 100 | Records requested per source. A bot sees new articles only among these, so the report warns when a source had more matches. |
 
 Set your own defaults for new bots under `"bot"` in `defaults.json` (see [Review settings](#review-settings)).
 
 Notes:
-- The agent is handed one step at a time: a screening batch, a fetch, or a single wiki task to give to a subagent. A wiki task that comes back three times without progress ends the run instead of looping. The job's instructions tell the agent to mark a run as failed in Hermes when it cannot go on.
+- The agent is handed one step at a time: a triage batch, a screening batch, a fetch, or a single wiki task to give to a subagent. A wiki task that comes back three times without progress ends the run instead of looping. The job's instructions tell the agent to mark a run as failed in Hermes when it cannot go on.
 - Scheduled jobs need a Hermes build from 28 September 2026 or later. On older builds every scheduled job fails at start (`No module named 'ruamel'`, visible in `hermes -p medlitbot cron runs`); run `hermes update` and `hermes gateway restart`.
 - Report names and the look-back window use the machine's local date.
-- The bot uses the `medlitbot` profile's model; change it with `hermes -p medlitbot model`. Jobs fire while the Hermes gateway runs (`hermes -p medlitbot cron status`); list past runs with `hermes -p medlitbot cron runs <job id>`.
+- The bot uses the `medlitbot` profile's model; change it in Hermes Desktop (right-click the med-lit bot → Edit Profile) or with `hermes -p medlitbot model`. Jobs fire while Hermes Desktop is open or the Hermes gateway runs (`hermes -p medlitbot cron status`); with only Desktop running, `hermes cron list` may still warn that the scheduler is not ready, but the jobs fire; list past runs with `hermes -p medlitbot cron runs <job id>`.
 - An [OpenAlex key](https://openalex.org/settings/api) is worth adding for bots: without one, OpenAlex may refuse searches when it is busy.
 - Europe PMC cannot be searched by a bot.
 
@@ -318,7 +321,7 @@ The wiki is a small knowledge graph. Its model follows the lightweight ontology 
 | Projects | `create_project`, `list_projects`, `open_project`, `project_settings` |
 | Search | `validate_question`, `start_search`, `resume_search`, `add_skipped_articles` |
 | Guidance | `guide` (rules for each stage, on demand) |
-| Screening | `set_screening_criteria`, `next_screening_batch`, `record_screening_decisions`, `review_article` |
+| Screening | `set_screening_criteria`, `next_triage_batch`, `record_triage_scores`, `next_screening_batch`, `record_screening_decisions`, `review_article` |
 | Fetch | `fetch_articles` |
 | Wiki | `wiki_tasks`, `next_wiki_article`, `get_article_page`, `record_extraction`, `find_entities`, `list_duplicate_candidates`, `resolve_duplicates`, `merge_entities`, `next_synthesis`, `record_synthesis`, `export_wiki` |
 | Status | `list_runs`, `get_run_status`, `list_articles` |

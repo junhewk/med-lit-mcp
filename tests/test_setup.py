@@ -87,6 +87,27 @@ class SetupTests(Case):
         claude = (self.root / "claude.log").read_text()
         self.assertIn(f"mcp add med-lit --scope user -- {bin_dir}/uvx med-lit-mcp", claude)
 
+    @unittest.skipIf(os.name == "nt", "Hermes fake executable uses a Unix shell")
+    def test_hermes_desktop_launcher_is_found_off_path(self) -> None:
+        bin_dir = self.fake_clients()
+        (bin_dir / "hermes").rename(bin_dir / "desktop-hermes")
+        launcher = Path.home() / ".local" / "bin" / "hermes"
+        launcher.parent.mkdir(parents=True)
+        launcher.symlink_to(bin_dir / "desktop-hermes")
+        with patch.dict(os.environ, {"PATH": f"{bin_dir}:/usr/bin:/bin"}):
+            code = cli_setup.main(["setup", "--email", "me@example.org", "--yes", "--client", "hermes"])
+        self.assertEqual(code, 0)
+        self.assertIn(f"{launcher} mcp add med-lit --command {bin_dir}/uvx", (self.root / "hermes.log").read_text())
+
+    @unittest.skipIf(os.name == "nt", "Path.home() reads USERPROFILE on Windows, and Hermes ships uvx.exe there")
+    def test_hermes_desktop_uvx_is_used_when_uv_is_not_on_path(self) -> None:
+        uvx = Path.home() / ".hermes" / "bin" / "uvx"
+        uvx.parent.mkdir(parents=True)
+        uvx.write_text("#!/bin/sh\n")
+        uvx.chmod(0o755)
+        with patch.object(cli_setup.shutil, "which", return_value=None):
+            self.assertEqual(cli_setup.server_command(None), [str(uvx), "med-lit-mcp"])
+
     def test_interactive_keys_are_hidden_tested_and_only_kept_when_valid(self) -> None:
         answers = iter(["n", "n", "n", "y", "n"])  # add a Scopus key only
         console = cli_setup.Console(False, ask=lambda _prompt: next(answers), secret=lambda _prompt: "scopus-key-9999")
@@ -109,10 +130,13 @@ class SetupTests(Case):
         self.assertEqual(command[1:], ["run", "--quiet", "--directory", str(self.root.resolve()), "med-lit-mcp"])
 
     def test_default_settings_are_asked_validated_and_saved(self) -> None:
-        answers = iter(["2020-2010", "2020-", "40", "", "30", ""])  # the first years answer is rejected
+        answers = iter(["2020-2010", "2020-", "40", "", "30", "", "50", "8"])  # rejected: years, then a bot cap over 20
         console = cli_setup.Console(False, ask=lambda _prompt: next(answers))
         cli_setup.ask_defaults(console)
         saved = settings.user_defaults()["interactive"]
         self.assertEqual(saved["search"], {"years": "2020-", "per_source": 40, "preprint_allow": False})
         self.assertEqual((saved["fetch"]["limit"], saved["wiki"]["max_pages"]), (30, 3))
         self.assertEqual(settings.new_settings().search.years, "2020-")
+        self.assertEqual(settings.new_settings("bot").bot.max_new_articles, 8)
+        old = settings.ProjectSettings.model_validate({**settings.new_settings("bot").model_dump(), "bot": {"max_new_articles": 100}})
+        self.assertEqual(old.bot.max_new_articles, 20)  # saved before the session limit: loads at the limit

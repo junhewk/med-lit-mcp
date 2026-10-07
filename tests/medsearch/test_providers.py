@@ -94,6 +94,22 @@ async def test_ncbi_count_fetch_and_mesh_resolution() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_near_miss_heading_resolves_through_a_plain_search() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("esearch.fcgi"):
+            exact = "[MeSH Terms]" in request.url.params["term"]
+            return httpx.Response(200, json={"esearchresult": {"idlist": [] if exact else ["7"]}})
+        return httpx.Response(200, json={"result": {"uids": ["7"], "7": {"ds_meshterms": [
+            "Medical History Taking", "History Taking, Medical", "Anamnesis",
+        ]}}})
+
+    async with HttpSession(intervals={"ncbi": 0}, transport=httpx.MockTransport(handler)) as session:
+        resolver = MeshResolver(session, Credentials(ncbi_email="person@example.org"))
+        assert await resolver.resolve("History Taking") == "Medical History Taking"
+        assert await resolver.resolve("photosynthesis in ferns") is None
+
+
+@pytest.mark.asyncio
 async def test_ncbi_requires_contact_email() -> None:
     async with HttpSession(transport=httpx.MockTransport(lambda _: httpx.Response(500))) as session:
         provider = NCBIProvider(session, Credentials(), database="pubmed")
