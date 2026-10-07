@@ -93,7 +93,7 @@ class SetupUITests(Case):
         keys.set_key(keys.BY_NAME["scopus"], "existing-secret")
         result = self.request("/api/save", self.values(keys={"scopus": {"action": "keep"}}))
         self.assertTrue(result["connected"])
-        self.assertEqual(result["tools"], 31)
+        self.assertEqual(result["tools"], 33)
         self.assertTrue(self.server.succeeded)
         self.assertTrue(self.server.finished.wait(timeout=1))
         self.assertEqual(keys.read_keys()["SCOPUS_API_KEY"], "existing-secret")
@@ -170,7 +170,7 @@ class SetupUITests(Case):
 
     def test_native_handshake(self) -> None:
         result = anyio.run(check_connection, [sys.executable, "-m", "med_lit_mcp"])
-        self.assertEqual(result, {"connected": True, "tools": 31})
+        self.assertEqual(result, {"connected": True, "tools": 33})
 
     def test_folder_selection_and_cancel_leave_settings_unchanged(self) -> None:
         folder = str(self.root / 'reviews with spaces 한글')

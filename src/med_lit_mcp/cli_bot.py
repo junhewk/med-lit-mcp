@@ -1,8 +1,9 @@
 """`med-lit-mcp setup bot`: create and edit scheduled bot projects run by Hermes cron jobs.
 
 All bots share one Hermes profile (PROFILE). Its med-lit server runs with MED_LIT_SCOPE=bot, so it
-sees only bot projects, and its scheduled runs get only the med-lit tools and subagents. Each bot
-project has its own cron job.
+sees only bot projects, and its scheduled runs and chats get only the med-lit tools and subagents.
+Each bot project has its own cron job. Hermes Desktop's Bot Mode shows the profile as one Bot, each job
+as one of its routines, and posts each run's report to the Bot's chat.
 """
 
 from __future__ import annotations
@@ -18,12 +19,23 @@ from pathlib import Path
 from typing import Any
 
 from . import bot, projects, screening, settings
-from .cli_setup import SERVER_NAME, Console, _run, server_command
+from .cli_setup import SERVER_NAME, Console, _run, find_hermes, server_command
 from .config import ncbi_email
 from .store import RUN_FILE, read_json
 
 PROFILE = "medlitbot"
-CRON_TOOLSETS = f"[delegation, {SERVER_NAME}]"
+# Scheduled runs (cron) and chats with the profile, including Hermes Desktop's Bot Chat (cli), get only
+# med-lit and subagents. Bot Mode would also give the Bot Chat message_agent, which hands work to other
+# Bots such as the main profile, whose med-lit server is not bot-scoped; the protocol switch removes it.
+PROFILE_CONFIG = (
+    ("platform_toolsets.cron", f"[delegation, {SERVER_NAME}]"),
+    ("platform_toolsets.cli", f"[delegation, {SERVER_NAME}]"),
+    ("agent.bot_mode_protocol", "false"),
+)
+# Hermes Desktop Bot Mode: the roster entry, the routine namespace and report delivery to the Bot Chat.
+BOT_TITLE = "med-lit bot"
+BOT_DESCRIPTION = "Keeps med-lit literature reviews up to date on a schedule; each review is one routine."
+DELIVER = "bot-chat"
 WEEKDAYS = ("sun", "mon", "tue", "wed", "thu", "fri", "sat")
 TIME = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 JOB_ID = re.compile(r"\b[0-9a-f]{12}\b")
@@ -33,10 +45,14 @@ JOB_ID = re.compile(r"\b[0-9a-f]{12}\b")
 
 
 def hermes_path() -> str:
-    path = shutil.which("hermes")
+    path = find_hermes()
     if not path:
-        raise SystemExit("Bots run as Hermes scheduled jobs, and hermes was not found on this machine.")
+        raise SystemExit("Bots run as Hermes scheduled jobs, and neither the hermes command nor Hermes Desktop was found on this machine.")
     return path
+
+
+def job_name(name: str) -> str:
+    return f"[bot:{PROFILE}] {name}"
 
 
 def _hermes(hermes: str, *args: str, stdin: str = "", timeout: float | None = 300) -> subprocess.CompletedProcess[str]:
@@ -64,15 +80,45 @@ def ensure_profile(hermes: str, command: list[str]) -> list[str]:
     )
     if added.returncode != 0 or "Saved" not in added.stdout:
         raise SystemExit(f"Could not register med-lit in the {PROFILE} profile:\n{(added.stderr or added.stdout)[-500:]}")
-    toolsets = _hermes(hermes, "config", "set", "platform_toolsets.cron", CRON_TOOLSETS)
-    if toolsets.returncode != 0:
-        notes.append(f"could not limit scheduled runs to med-lit tools: {(toolsets.stderr or toolsets.stdout).strip()[-200:]}")
+    return notes + desktop_bot(hermes)
+
+
+def desktop_bot(hermes: str) -> list[str]:
+    """Limit the profile's runs and chats to med-lit tools and list it in Hermes Desktop's Bots."""
+    notes = []
+    for key, value in PROFILE_CONFIG:
+        result = _hermes(hermes, "config", "set", key, value)
+        if result.returncode != 0:
+            notes.append(f"could not set {key} in the {PROFILE} profile: {(result.stderr or result.stdout).strip()[-200:]}")
+    marked = mark_bot(hermes)
+    if marked:
+        notes.append(marked)
     return notes
+
+
+def mark_bot(hermes: str) -> str | None:
+    """Give the profile its Bot Mode title in profile.yaml, which no Hermes command writes.
+
+    The line is a JSON flow mapping, which YAML reads as is. An existing ui_meta (the Bot was renamed
+    or restyled in Hermes Desktop) is left alone.
+    """
+    found = re.search(r"^Path:\s*(.+?)\s*$", _run([hermes, "profile", "show", PROFILE]).stdout, re.MULTILINE)
+    if not found or not Path(found.group(1)).is_dir():
+        return f"could not find the {PROFILE} profile folder to list it in Hermes Desktop's Bots"
+    path = Path(found.group(1)) / "profile.yaml"
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    if re.search(r"^ui_meta\s*:", text, re.MULTILINE):
+        return None
+    meta = {"hermes-bots": {"title": BOT_TITLE, "description": BOT_DESCRIPTION}}
+    if text and not text.endswith("\n"):
+        text += "\n"
+    path.write_text(f"{text}ui_meta: {json.dumps(meta)}\n", encoding="utf-8")
+    return f"listed the {PROFILE} profile as '{BOT_TITLE}' in Hermes Desktop's Bots"
 
 
 def create_job(hermes: str, name: str, schedule: str) -> str:
     result = _hermes(
-        hermes, "cron", "create", schedule, bot.cron_prompt(name), "--name", f"med-lit bot: {name}", "--deliver", "local",
+        hermes, "cron", "create", schedule, bot.cron_prompt(name), "--name", job_name(name), "--deliver", DELIVER,
     )
     found = JOB_ID.search(result.stdout)
     if result.returncode != 0 or not found:
@@ -134,7 +180,8 @@ def ask_schedule(console: Console, current: str | None = None) -> str:
 
 BOT_QUESTIONS = (
     ("bot.lookback_days", "Look back how many days of publications each run", int),
-    ("bot.max_new_articles", "Most new articles taken in per run (the rest wait for a later run)", int),
+    ("bot.max_new_articles", "Articles screened per run, 1-20 (the best-triaged; the rest wait for later runs)",
+     lambda text: settings.session_cap(int(text))),
     ("search.per_source", "Records requested from each source per run (1-200)", int),
 )
 
@@ -246,7 +293,8 @@ def create(args: argparse.Namespace, console: Console) -> int:
     if console.confirm("Run it once now? It runs in this terminal until it finishes (can take an hour or more).", default=False):
         print("Running…")
         print(job_command(hermes, "run", job_id, timeout=None))
-        print(f"The report is in {project.root / bot.UPDATES}; past runs: hermes -p {PROFILE} cron runs {job_id}")
+        print(f"The report is in {project.root / bot.UPDATES} and in {BOT_TITLE}'s chat in Hermes Desktop; "
+              f"past runs: hermes -p {PROFILE} cron runs {job_id}")
     return 0
 
 
@@ -256,8 +304,13 @@ def edit(args: argparse.Namespace, console: Console) -> int:
     state = bot.read_state(project)
     job_id = (state.get("hermes") or {}).get("job_id")
     if job_id:
-        # Keep the job's instructions current with this version of med-lit.
-        job_command(hermes, "edit", job_id, "--prompt", bot.cron_prompt(project.name))
+        # Keep the job's instructions, routine name and delivery current with this version of med-lit.
+        job_command(
+            hermes, "edit", job_id, "--prompt", bot.cron_prompt(project.name),
+            "--name", job_name(project.name), "--deliver", DELIVER,
+        )
+        for note in desktop_bot(hermes):
+            print(f"- {note}")
     while True:
         state = bot.read_state(project)
         print(f"\n{project.name}: {state['status']}, {schedule_text(state['schedule'])}")

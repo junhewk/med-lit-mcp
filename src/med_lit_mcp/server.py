@@ -25,6 +25,7 @@ from . import (
     screening,
     search,
     settings,
+    triage,
     wiki,
     wiki_export,
 )
@@ -41,6 +42,7 @@ from .schemas import (
     ReviewDecision,
     ScreeningDecision,
     Source,
+    TriageScore,
     WikiStatus,
 )
 
@@ -55,7 +57,8 @@ Tools by stage (if your client loads tools on demand, look them up by these name
   when presenting the search question; change them only as the researcher asks)
 - search: validate_question -> start_search(question_id); resume_search; add_skipped_articles (only
   when the researcher asks for articles skipped for having no DOI or PMID)
-- screening: set_screening_criteria, next_screening_batch, record_screening_decisions, review_article
+- screening: set_screening_criteria, next_triage_batch + record_triage_scores (rank titles first),
+  next_screening_batch, record_screening_decisions (20 articles per session), review_article
 - fetch: fetch_articles
 - wiki: wiki_tasks (start here and follow it), export_wiki
 - status: get_run_status, list_runs, list_articles
@@ -181,7 +184,7 @@ async def guide(topic: Literal[tuple(GUIDES)]) -> str:  # type: ignore[valid-typ
     return GUIDES[topic]
 
 
-@mcp.tool(annotations=LOCAL_ADD)
+@mcp.tool(annotations=NETWORK_ADD)
 async def validate_question(
     question: ResearchQuestion, sources: list[Source] | None = None, project: ProjectName = None
 ) -> dict[str, Any]:
@@ -258,9 +261,29 @@ async def set_screening_criteria(
 
 
 @mcp.tool(annotations=LOCAL_UPDATE_IDEMPOTENT)
-async def next_screening_batch(run_id: RunId, batch_size: Annotated[int, Field(ge=1, le=25)] = 10) -> dict[str, Any]:
-    """Get the next unscreened titles/abstracts with the criteria to judge them against."""
-    return await _run(screening.next_batch, run_id, batch_size)
+async def next_triage_batch(run_id: RunId) -> dict[str, Any]:
+    """Get untriaged titles with the question and criteria, to score 0-3 before screening."""
+    return await _run(triage.next_batch, run_id)
+
+
+@mcp.tool(annotations=LOCAL_UPDATE)
+async def record_triage_scores(
+    run_id: RunId,
+    revision: Annotated[int, Field(description="revision from next_triage_batch")],
+    scores: Annotated[list[TriageScore], Field(min_length=1, max_length=500)],
+) -> dict[str, Any]:
+    """Record the 0-3 title scores that decide which articles each session screens."""
+    return await _run(triage.record_scores, run_id, revision, [score.model_dump() for score in scores])
+
+
+@mcp.tool(annotations=LOCAL_UPDATE_IDEMPOTENT)
+async def next_screening_batch(
+    run_id: RunId,
+    batch_size: Annotated[int, Field(ge=1, le=25)] = 10,
+    new_round: Annotated[bool, Field(description="Start the next session of 20; only when the researcher asks")] = False,
+) -> dict[str, Any]:
+    """Get the next titles/abstracts of this session (20 best-triaged articles) with the criteria."""
+    return await _run(screening.next_batch, run_id, batch_size, new_round=new_round)
 
 
 @mcp.tool(annotations=LOCAL_UPDATE)
@@ -539,8 +562,8 @@ def screen_run(run_id: str) -> str:
     """Screen a run's search results against criteria."""
     return (
         f"Screen run {run_id}. If no criteria are set, ask me for inclusion and exclusion criteria "
-        "first. Then repeat next_screening_batch and record_screening_decisions until nothing "
-        "remains, and summarize the include/exclude/uncertain counts."
+        "first. Then repeat next_screening_batch and record_screening_decisions until the session is "
+        "complete (triage the titles first when it asks), and summarize the include/exclude/uncertain counts."
     )
 
 
@@ -552,7 +575,10 @@ def build_wiki(run_id: str) -> str:
 
 STAGE_TOOLS = {
     "search": ("validate_question", "start_search", "resume_search", "add_skipped_articles"),
-    "screening": ("set_screening_criteria", "next_screening_batch", "record_screening_decisions", "review_article"),
+    "screening": (
+        "set_screening_criteria", "next_triage_batch", "record_triage_scores", "next_screening_batch",
+        "record_screening_decisions", "review_article",
+    ),
     "fetch": ("fetch_articles",),
     "wiki": (
         "wiki_tasks", "next_wiki_article", "get_article_page", "record_extraction", "find_entities",

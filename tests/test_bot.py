@@ -20,6 +20,7 @@ from med_lit_mcp import (
     screening,
     search,
     settings,
+    triage,
     wiki,
 )
 from med_lit_mcp.server import mcp
@@ -58,6 +59,11 @@ class BotCase(Case):
         with patch.object(search.subprocess, "Popen", side_effect=self.launch):
             return bot.bot_start("Watch")
 
+    def begin(self) -> dict[str, Any]:
+        """Start a run and take its first step, which keeps new articles within the cap."""
+        self.start()
+        return bot.bot_next("Watch")
+
     def manifest(self) -> dict[str, Any]:
         return read_json(self.path / RUN_FILE)
 
@@ -94,18 +100,27 @@ class BotRunTests(BotCase):
         self.assertEqual(read_json(self.path / "question-update-1.json")["filters"]["from_date"], window)
         self.assertEqual(self.argv[self.argv.index("--limit-per-source") + 1], "100")
         manifest = self.manifest()
-        self.assertEqual(sorted(manifest["articles"]), ["pubmed:3", "pubmed:4", "pubmed:5"])  # best-ranked three
-        self.assertEqual(manifest["updates"][0]["dropped_over_cap"], ["pubmed:2", "pubmed:1"])
+        self.assertEqual((manifest["articles"], len(manifest["candidates"])), ({}, 5))  # waiting for triage
         self.assertEqual(self.start()["busy"], True)  # no overlapping runs
 
         step = bot.bot_next("Watch")
+        self.assertEqual((step["step"], step["candidates"], step["keep"]), ("triage", 5, 3))
+        batch = triage.next_batch(self.run_id)
+        self.assertEqual([item["uid"] for item in batch["items"]], ["pubmed:5", "pubmed:4", "pubmed:3", "pubmed:2", "pubmed:1"])
+        scores = {"pubmed:1": 3, "pubmed:2": 0, "pubmed:3": 2, "pubmed:4": 2, "pubmed:5": 1}
+        triage.record_scores(self.run_id, batch["revision"], [{"uid": u, "score": s} for u, s in scores.items()])
+        step = bot.bot_next("Watch")
         self.assertEqual((step["step"], step["pending"]), ("screen", 3))
-        self.screen({"pubmed:5": "include", "pubmed:4": "exclude", "pubmed:3": "uncertain"})
+        manifest = self.manifest()
+        # The best-triaged three, ties broken by search rank (the engine ranked pubmed:4 above pubmed:3).
+        self.assertEqual(sorted(manifest["articles"]), ["pubmed:1", "pubmed:3", "pubmed:4"])
+        self.assertEqual(manifest["updates"][0]["dropped_over_cap"], ["pubmed:5", "pubmed:2"])
+        self.screen({"pubmed:1": "include", "pubmed:4": "exclude", "pubmed:3": "uncertain"})
         self.assertEqual(bot.bot_next("Watch")["step"], "fetch")
-        self.add_text(self.run_id, "pubmed:5", TEXT)
+        self.add_text(self.run_id, "pubmed:1", TEXT)
         step = bot.bot_next("Watch")
         self.assertEqual((step["step"], step["stage"], step["tasks_in_stage"]), ("wiki", "extract", 1))
-        self.assertIn("pubmed:5", step["task"])
+        self.assertIn("pubmed:1", step["task"])
         self.assertIn("delegate_task", step["do"])
         self.assertEqual(bot.bot_next("Watch")["step"], "wiki")  # handed out again: no progress yet
         self.assertEqual(bot.bot_next("Watch")["step"], "finish")  # a third time without progress ends the run
@@ -126,7 +141,7 @@ class BotRunTests(BotCase):
 
     def test_a_quiet_run_is_silent_and_known_articles_are_skipped(self) -> None:
         self.found = [record(1)]
-        self.start()
+        self.begin()
         self.screen({"pubmed:1": "exclude"})
         self.assertEqual(bot.bot_next("Watch")["step"], "finish")
         self.assertNotEqual(bot.bot_finish("Watch")["message"], bot.SILENT)
@@ -138,7 +153,7 @@ class BotRunTests(BotCase):
 
     def test_a_vague_uncertain_reason_from_an_older_run_is_screened_again(self) -> None:
         self.found = [record(1)]
-        self.start()
+        self.begin()
         manifest = self.manifest()
         manifest["articles"]["pubmed:1"]["screening"] = {
             "decision": "uncertain", "reason": "Ambiguous case for researcher review", "evidence": "",
@@ -150,7 +165,7 @@ class BotRunTests(BotCase):
 
     def test_new_criteria_rescreen_and_withdraw_articles_from_the_wiki(self) -> None:
         self.found = [record(1, title="Oncology SDM")]
-        self.start()
+        self.begin()
         self.screen({"pubmed:1": "include"})
         digest = self.add_text(self.run_id, "pubmed:1", TEXT)
         wiki.record_extraction(
@@ -208,7 +223,7 @@ class BotRunTests(BotCase):
 
     def test_the_next_run_finishes_and_reports_a_run_that_stopped_early(self) -> None:
         self.found = [record(1, title="Study 1"), record(2, title="Study 2")]
-        self.start()
+        self.begin()
         self.screen({"pubmed:1": "include", "pubmed:2": "uncertain"})
         # The agent stops without bot_finish; its server process is gone.
         state_path = self.bot.work / bot.BOT_FILE
@@ -216,7 +231,7 @@ class BotRunTests(BotCase):
         state["active"]["pid"] = 2**22 + 12345
         atomic_json(state_path, state)
         self.found = [record(1, title="Study 1"), record(2, title="Study 2"), record(3, title="Study 3")]
-        self.start()
+        self.begin()
         self.assertEqual(bot.latest_update(self.bot), 2)
         self.screen({"pubmed:3": "exclude"})
         self.assertEqual(bot.bot_next("Watch")["step"], "fetch")  # the stopped run's include is fetched now
@@ -279,6 +294,7 @@ echo "$*" >> "{log}"
 [ "$1" = "-p" ] && shift 2
 case "$1 $2" in
   "profile list") echo " default   model   running" ;;
+  "profile show") echo "Profile: $3"; echo "Path:    {profile}" ;;
   "mcp list") printf '  Name   Transport\\n  ────   ─────\\n  med-lit   uv run   all\\n  github   npx   all\\n' ;;
   "mcp add") echo "  Saved '$3'" ;;
   "cron create") echo "Created job 0123456789ab" ;;
@@ -287,15 +303,22 @@ esac
 
 
 class SetupBotTests(Case):
-    def test_setup_bot_copies_a_tried_search_and_schedules_it_in_the_bot_profile(self) -> None:
+    def fake_hermes(self) -> Path:
         if os.name == "nt":
             self.skipTest("Hermes bot registration uses a Unix shell fixture")
-        run_id = self.make_run([record(1)])
+        self.profile_dir = self.root / "hermes" / "profiles" / "medlitbot"
+        self.profile_dir.mkdir(parents=True)
+        (self.profile_dir / "profile.yaml").write_text("description: Scheduled med-lit literature bots\n")
         bin_dir = self.root / "bin"
         bin_dir.mkdir()
         for name, body in (("hermes", FAKE_HERMES), ("uvx", "#!/bin/sh\n")):
-            (bin_dir / name).write_text(body.format(log=self.root / "hermes.log"))
+            (bin_dir / name).write_text(body.format(log=self.root / "hermes.log", profile=self.profile_dir))
             (bin_dir / name).chmod(0o755)
+        return bin_dir
+
+    def test_setup_bot_copies_a_tried_search_and_schedules_it_in_the_bot_profile(self) -> None:
+        run_id = self.make_run([record(1)])
+        bin_dir = self.fake_hermes()
         with patch.dict(os.environ, {"PATH": f"{bin_dir}:{os.environ['PATH']}"}):
             code = cli_setup.main(["setup", "bot", "--from-run", run_id, "--name", "SDM watch", "--schedule", "30 5 * * 1", "--yes"])
         self.assertEqual(code, 0)
@@ -308,10 +331,55 @@ class SetupBotTests(Case):
         self.assertIn("-p medlitbot mcp remove github", log)
         self.assertIn(f"-p medlitbot mcp add med-lit --command {bin_dir}/uvx --env MED_LIT_SCOPE=bot", log)
         self.assertIn("-p medlitbot config set platform_toolsets.cron [delegation, med-lit]", log)
+        self.assertIn("-p medlitbot config set platform_toolsets.cli [delegation, med-lit]", log)
+        self.assertIn("-p medlitbot config set agent.bot_mode_protocol false", log)  # no message_agent
         self.assertIn('-p medlitbot cron create 30 5 * * 1 You are the med-lit literature bot for the project "SDM watch"', log)
+        # Hermes Desktop Bot Mode: one routine of the med-lit Bot, reporting to its Bot Chat.
+        self.assertIn("--name [bot:medlitbot] SDM watch --deliver bot-chat", log)
         self.assertEqual(cli_bot.schedule_text(state["schedule"]), "every Mon at 05:30")
+        lines = (self.profile_dir / "profile.yaml").read_text().splitlines()
+        self.assertEqual(lines[0], "description: Scheduled med-lit literature bots")
+        meta = json.loads(lines[1].removeprefix("ui_meta: "))
+        self.assertEqual(meta["hermes-bots"]["title"], "med-lit bot")
+
+    def test_desktop_bot_metadata_is_written_once_and_kept(self) -> None:
+        bin_dir = self.fake_hermes()
+        restyled = 'description: x\nui_meta:\n  hermes-bots: {title: Lit watcher, color: teal}\n'
+        (self.profile_dir / "profile.yaml").write_text(restyled)
+        self.assertIsNone(cli_bot.mark_bot(str(bin_dir / "hermes")))
+        self.assertEqual((self.profile_dir / "profile.yaml").read_text(), restyled)
+
+    def test_editing_a_bot_moves_its_job_into_bot_mode(self) -> None:
+        bin_dir = self.fake_hermes()
+        project = bot.create_bot("Old watch", QUESTION, ["pubmed"], CRITERIA, schedule="0 5 * * *")
+        bot.set_hermes(project, profile="medlitbot", job_id="0123456789ab")
+        with patch.dict(os.environ, {"PATH": f"{bin_dir}:{os.environ['PATH']}"}):
+            code = cli_setup.main(["setup", "bot", "--edit", "Old watch", "--yes"])
+        self.assertEqual(code, 0)
+        log = (self.root / "hermes.log").read_text()
+        self.assertIn("-p medlitbot cron edit 0123456789ab --prompt You are the med-lit literature bot", log)
+        self.assertIn("--name [bot:medlitbot] Old watch --deliver bot-chat", log)
+        self.assertIn("-p medlitbot config set platform_toolsets.cli [delegation, med-lit]", log)
+        self.assertIn("ui_meta: ", (self.profile_dir / "profile.yaml").read_text())
 
     def test_bots_are_staggered_and_need_a_tried_search(self) -> None:
         self.assertEqual(cli_bot.suggest_time({"05:00", "05:30"}), "06:00")
         with self.assertRaisesRegex(SystemExit, "normal review"):
             cli_bot.choose_run(cli_setup.Console(True), None)
+
+
+class BotQuestionRepairTests(Case):
+    def test_a_copied_question_with_sentence_terms_is_repaired_not_rejected(self) -> None:
+        older = {**QUESTION, "components": {**QUESTION["components"], "concept": {"groups": [
+            {"text": "large language models used to conduct or simulate student interviews (history-taking)",
+             "synonyms": ["large language models", "LLM"]},
+        ]}}}
+        project = bot.create_bot("Older", older, ["pubmed"], CRITERIA, schedule="0 5 * * *")
+        saved = read_json(project.runs / bot.read_state(project)["run_id"] / "question.json")
+        self.assertEqual(saved["components"]["concept"]["groups"][0]["text"], "large language models")
+        hopeless = {**QUESTION, "components": {**QUESTION["components"], "concept": {"groups": [
+            {"text": "large language models used to conduct or simulate student interviews (history-taking)"},
+        ]}}}
+        with self.assertRaisesRegex(ValueError, "no term short enough"):
+            bot.create_bot("Hopeless", hopeless, ["pubmed"], CRITERIA, schedule="0 5 * * *")
+        self.assertNotIn("Hopeless", [row["project"] for row in projects.list_projects()])

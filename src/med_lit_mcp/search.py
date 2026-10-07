@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import html
 import json
@@ -17,11 +18,17 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from .config import ncbi_api_key, ncbi_email, state_dir
 from .fetch import _ncbi_pause, safe_http
 from .medsearch.cli import _years_ago
+from .medsearch.config import Credentials
+from .medsearch.http import HttpSession, SourceError
 from .medsearch.models import Question, ValidationError
+from .medsearch.providers import MeshResolver
 from .medsearch.preprints import is_preprint
+from .medsearch.repair import MAX_TERM_WORDS, is_generic, mentions_age, repair_question, unsearchable
 from .projects import Project, new_run_dir, run_dir
 from .platforms import process_alive, stop_process_tree
 from .runs import summary
@@ -125,10 +132,80 @@ def default_sources() -> list[str]:
     ]
 
 
+def _resolve_mesh(candidates: list[str]) -> dict[str, str | None]:
+    """Each suggested MeSH heading as NCBI names it, or None when NCBI knows no such heading."""
+
+    async def resolve() -> dict[str, str | None]:
+        credentials = Credentials.from_env()
+        async with HttpSession(intervals={"ncbi": 0.1 if credentials.ncbi_api_key else 0.34}) as session:
+            resolver = MeshResolver(session, credentials)
+            return {candidate: await resolver.resolve(candidate) for candidate in candidates}
+
+    return asyncio.run(resolve())
+
+
+def _check_mesh(question: Question) -> list[str]:
+    """Replace suggested MeSH headings with NCBI's own, drop unknown ones; returns notes for the researcher."""
+    candidates = sorted({c for block in question.components.values() for g in block.groups for c in g.candidate_mesh})
+    if not candidates:
+        return []
+    if not ncbi_email():
+        return ["MeSH headings were not checked because NCBI_EMAIL is not set."]
+    try:
+        headings = _resolve_mesh(candidates)
+    except (SourceError, httpx.HTTPError, OSError) as exc:
+        return [f"MeSH headings could not be checked now ({exc}); the search checks them again when it starts."]
+    notes = []
+    for name, block in question.components.items():
+        for group in block.groups:
+            kept = []
+            for candidate in group.candidate_mesh:
+                heading = headings.get(candidate)
+                if heading is None:
+                    notes.append(f"{name}/{group.label}: {candidate!r} is not a MeSH heading and was removed.")
+                    continue
+                if heading != candidate:
+                    notes.append(f"{name}/{group.label}: MeSH heading {candidate!r} is {heading!r} and was corrected.")
+                kept.append(heading)
+            group.candidate_mesh = list(dict.fromkeys(kept))
+    return notes
+
+
+def _question_warnings(question: Question, sources: list[str]) -> list[str]:
+    """What a repair cannot settle, for the researcher to see before approving."""
+    warnings = []
+    for name, block in question.components.items():
+        for group in block.groups:
+            where = f"{name}/{group.label}"
+            terms = group.free_terms()
+            if all(mentions_age(term) for term in [*terms, *group.candidate_mesh]):
+                warnings.append(
+                    f"{where} is an age group: studies whose title and abstract do not state the age, and recent "
+                    "ones PubMed has not indexed yet, are missed. If age only rules out other ages, leave it to "
+                    "the screening criteria instead."
+                )
+            elif generic := [term for term in terms if is_generic(term)]:
+                warnings.append(
+                    f"{where}: {', '.join(generic)} appears in nearly every clinical study, so this group barely "
+                    "narrows the search; name the population more precisely if possible."
+                )
+            if NCBI_SOURCES & set(sources) and not group.candidate_mesh:
+                warnings.append(
+                    f"{where} has no MeSH heading suggested; unless its text is one, PubMed and PMC match it by "
+                    "words only."
+                )
+    return warnings
+
+
 def validate_question(
-    question: dict[str, Any], sources: list[str] | None = None, project: Project | None = None
+    question: dict[str, Any], sources: list[str] | None = None, project: Project | None = None,
+    *, repair_sentences: bool = False,
 ) -> dict[str, Any]:
-    """Validate a question; with a project, fill in its settings (years, filters, sources)."""
+    """Validate a question; with a project, fill in its settings (years, filters, sources).
+
+    A drafted question with sentence-like terms is rejected so the agent redrafts it; a question
+    copied from a search already run (repair_sentences, for bots) has those terms dropped instead.
+    """
     config = load_settings(project.root).search if project else SearchSettings()
     normalized = normalize_question(question)
     filters = normalized["filters"]
@@ -143,9 +220,31 @@ def validate_question(
         filters["exclude_preprints"] = True
     chosen = normalize_sources(sources) or normalize_sources(config.sources)
     try:
-        Question.from_dict(normalized)
+        parsed = Question.from_dict(normalized)
     except ValidationError as exc:
         raise ValueError(f"Question rejected: {exc}") from exc
+    sentences = [
+        f"{name}/{group.label}: {term!r}"
+        for name, block in parsed.components.items()
+        for group in block.groups
+        for term in group.free_terms()
+        if unsearchable(term)
+    ]
+    if sentences and not repair_sentences:
+        raise ValueError(
+            "Question rejected: text and synonyms are searched as exact phrases, so each must be a term as titles "
+            f"and abstracts write it (at most {MAX_TERM_WORDS} words, no 'or', brackets or semicolons). Put "
+            "alternatives in synonyms, give each separately required facet its own group, and keep the "
+            "researcher's wording in `question`. Sentence-like: " + "; ".join(sentences)
+        )
+    mesh = _check_mesh(parsed)
+    repaired, unrepairable = repair_question(parsed)
+    if unrepairable:
+        raise ValueError(
+            f"Question rejected: {', '.join(unrepairable)} has no term short enough to match as a phrase; "
+            "give it a short search term"
+        )
+    normalized["components"] = parsed.to_dict()["components"]
     warnings = []
     if not normalized["filters"].get("from_date"):
         start = _years_ago(date.today(), 3).isoformat()  # noqa: DTZ011 - same local date as the engine
@@ -164,6 +263,7 @@ def validate_question(
         warnings.append("semantic-scholar is skipped by default until SEMANTIC_SCHOLAR_API_KEY is set")
     if "scopus" in effective and not scopus_key():
         warnings.append("scopus needs SCOPUS_API_KEY (uvx med-lit-mcp keys set scopus), so it will fail")
+    warnings += mesh + [f"Repaired {note}." for note in repaired] + _question_warnings(parsed, effective)
     question_id = uuid.uuid4().hex
     applied = {
         "years": config.years or "last three years (default)",
@@ -403,12 +503,14 @@ def import_results(path: Path, manifest: dict[str, Any]) -> None:
                 fresh.append((uid, record))
                 for key in _record_keys(uid, record):
                     known.setdefault(key, (manifest["run_id"], uid))
-    cap = (update or {}).get("cap")
     dropped: list[str] = []
-    if cap is not None:
-        # Keep the best-ranked new articles; the rest are reported and may be found again later.
-        fresh.sort(key=lambda pair: (ranks.get(pair[0]) is None, ranks.get(pair[0]) or 0))
-        fresh, dropped = fresh[:cap], [uid for uid, _ in fresh[cap:]]
+    if (update or {}).get("cap") is not None:
+        # A bot keeps its cap of these after the agent triages their titles (triage.select_candidates);
+        # until then they wait as candidates, and the update records them as none new yet.
+        candidates = manifest.setdefault("candidates", {})
+        for uid, record in fresh:
+            candidates[uid] = {"record": record, "rank": ranks.get(uid), "update": update["number"]}
+        fresh = []
     for uid, record in fresh:
         articles[uid] = {"record": record, "fetch": "pending", "wiki": "pending", "rank": ranks.get(uid)}
         if update:

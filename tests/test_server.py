@@ -61,7 +61,7 @@ class ServerToolTests(Case, unittest.IsolatedAsyncioTestCase):
             listed = await client.list_tools()
             assert_complete_annotations(self, listed)
             tools = {tool.name: tool for tool in listed.tools}
-            self.assertEqual(len(tools), 31)
+            self.assertEqual(len(tools), 33)
             self.assertIn("semantic-scholar", json.dumps(tools["validate_question"].inputSchema))
             self.assertNotIn("components", json.dumps(tools["start_search"].inputSchema))
             # Clients that load tools on demand find tools by name: every tool is named in the
@@ -173,7 +173,7 @@ class StdioTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("search -> screening -> fetch -> wiki", initialized.instructions)
                 listed = await client.list_tools()
                 assert_complete_annotations(self, listed)
-                self.assertEqual(len(listed.tools), 31)
+                self.assertEqual(len(listed.tools), 33)
                 result = await client.call_tool("list_projects", {})
                 self.assertFalse(result.isError)
 
@@ -191,7 +191,7 @@ class StdioTests(unittest.IsolatedAsyncioTestCase):
                 assert_complete_annotations(self, listed)
                 names = {tool.name for tool in listed.tools}
                 prompts = {prompt.name for prompt in (await client.list_prompts()).prompts}
-        self.assertEqual(len(names), 17)
+        self.assertEqual(len(names), 19)
         self.assertIn("create_project", names)
         self.assertIn("fetch_articles", names)
         self.assertNotIn("next_wiki_article", names)
@@ -213,7 +213,7 @@ class StdioTests(unittest.IsolatedAsyncioTestCase):
                 env={**os.environ, "MED_LIT_STATE_DIR": data, "MED_LIT_CONFIG_DIR": data, "NCBI_EMAIL": ""},
             )
         report = json.loads(completed.stdout)
-        self.assertEqual((report["database_schema"], report["ncbi_email"], report["tools"]), (2, False, 31))
+        self.assertEqual((report["database_schema"], report["ncbi_email"], report["tools"]), (2, False, 33))
         self.assertEqual(report["projects"], [])
         self.assertEqual(report["stages"], ["search", "screening", "fetch", "wiki"])
         self.assertIn("NCBI_EMAIL", completed.stderr)

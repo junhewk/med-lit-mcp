@@ -25,6 +25,7 @@ from .models import SOURCES, Question, Strategy, ValidationError
 from .orchestrator import execute_search, preflight
 from .providers import MeshResolver, provider_for
 from .query import compile_strategy, default_sources
+from .repair import repair_question
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -160,6 +161,10 @@ async def _create_plan(
             warnings.extend(await MeshResolver(active, credentials).resolve_question(question))
     else:
         warnings.append("MeSH resolution was explicitly skipped.")
+    # Validated questions are already repaired; this repairs questions saved before (bot questions).
+    repaired, unrepairable = repair_question(question)
+    warnings.extend(f"Repaired {note}." for note in repaired)
+    warnings.extend(f"{where} has no term short enough to match; it is searched as written." for where in unrepairable)
     strategy = compile_strategy(
         question,
         mode=mode,
