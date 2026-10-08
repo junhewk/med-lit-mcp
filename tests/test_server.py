@@ -17,7 +17,7 @@ from mcp.shared.memory import create_connected_server_and_client_session
 from mcp.types import ListToolsResult
 from test_search import FakeProcess
 
-from med_lit_mcp import fetch, search
+from med_lit_mcp import __version__, fetch, search
 from med_lit_mcp.guides import GUIDES
 from med_lit_mcp.server import mcp
 
@@ -49,7 +49,7 @@ class ServerToolTests(Case, unittest.IsolatedAsyncioTestCase):
             tools = {tool.name: tool for tool in listed.tools}
             for name in ("get_article_page", "find_entities", "list_duplicate_candidates", "get_run_status"):
                 self.assertFalse(tools[name].annotations.readOnlyHint, name)
-                self.assertTrue(tools[name].annotations.destructiveHint, name)
+                self.assertFalse(tools[name].annotations.destructiveHint, name)
                 self.assertTrue(tools[name].annotations.idempotentHint, name)
                 self.assertFalse(tools[name].annotations.openWorldHint, name)
             result = structured(await client.call_tool("find_entities", {"query": "chatbot"}))
@@ -171,6 +171,7 @@ class StdioTests(unittest.IsolatedAsyncioTestCase):
             async with stdio_client(params) as (read, write), ClientSession(read, write) as client:
                 initialized = await client.initialize()
                 self.assertIn("search -> screening -> fetch -> wiki", initialized.instructions)
+                self.assertEqual(initialized.serverInfo.version, __version__)
                 listed = await client.list_tools()
                 assert_complete_annotations(self, listed)
                 self.assertEqual(len(listed.tools), 33)
