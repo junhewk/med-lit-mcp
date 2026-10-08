@@ -70,9 +70,12 @@ Tools by stage (if your client loads tools on demand, look them up by these name
 """
 
 mcp = FastMCP("med-lit", instructions=INSTRUCTIONS)
-# Cover every supported path, including lazy database creation and migrations in query tools.
+mcp._mcp_server.version = __version__
+# Cover every supported path. Query tools may create or migrate the project database, so they are not
+# read-only; migrations keep all data, so they are not destructive.
 # Updates can overwrite existing state; only additive operations use destructiveHint=False.
 READ = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
+QUERY = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 LOCAL_ADD = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
 LOCAL_ADD_IDEMPOTENT = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 LOCAL_UPDATE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False)
@@ -260,7 +263,7 @@ async def set_screening_criteria(
     return await _run(save)
 
 
-@mcp.tool(annotations=LOCAL_UPDATE_IDEMPOTENT)
+@mcp.tool(annotations=READ)
 async def next_triage_batch(run_id: RunId) -> dict[str, Any]:
     """Get untriaged titles with the question and criteria, to score 0-3 before screening."""
     return await _run(triage.next_batch, run_id)
@@ -350,13 +353,19 @@ async def next_wiki_article(
     max_pages: Annotated[int | None, Field(ge=1, le=50, description="Limit pages read for the next article")] = None,
     uid: Annotated[str | None, Field(description="Serve only this article's pages (for a subagent that owns one article)")] = None,
 ) -> list[TextContent]:
-    """Get the next page of article text to extract wiki entities from (a JSON header plus the page)."""
+    """Get the next unextracted page of article text (a JSON header plus the page); it repeats until
+    record_extraction records it. An article whose text changed loses its old extraction first."""
     return _page(await _run(wiki.next_article, run_id, max_pages, uid))
 
 
-@mcp.tool(annotations=LOCAL_UPDATE_IDEMPOTENT, structured_output=False)
-async def get_article_page(run_id: RunId, uid: str, page: Annotated[int, Field(ge=0)]) -> list[TextContent]:
-    """Re-read one page of a fetched article (pages are numbered from 0)."""
+@mcp.tool(annotations=QUERY, structured_output=False)
+async def get_article_page(
+    run_id: RunId,
+    uid: Annotated[str, Field(description="Article uid")],
+    page: Annotated[int, Field(ge=0, description="Page number, from 0")],
+) -> list[TextContent]:
+    """Re-read one page of a fetched article, e.g. to check a quote; next_wiki_article serves the pages
+    still to extract. Reads only (may create the project database)."""
     return _page(await _run(wiki.get_page, run_id, uid, page))
 
 
@@ -384,24 +393,26 @@ async def record_extraction(
     )
 
 
-@mcp.tool(annotations=LOCAL_UPDATE_IDEMPOTENT)
+@mcp.tool(annotations=QUERY)
 async def find_entities(
-    query: str,
+    query: Annotated[str, Field(description="Name, alias, acronym or spelling variant")],
     project: ProjectName = None,
-    entity_type: EntityType | None = None,
-    limit: Annotated[int, Field(ge=1, le=50)] = 10,
+    entity_type: Annotated[EntityType | None, Field(description="Only this type")] = None,
+    limit: Annotated[int, Field(ge=1, le=50, description="Most matches")] = 10,
 ) -> list[dict[str, Any]]:
-    """Search a project's wiki entities by name, alias, acronym, or spelling variant."""
+    """Search a project's wiki entities by name, alias, acronym, or spelling variant, e.g. to reuse an
+    entity's id while extracting. Reads only (may create the project database)."""
     return await _run(lambda: wiki.find_entities(projects.get_project(project), query, entity_type, limit))
 
 
-@mcp.tool(annotations=LOCAL_UPDATE_IDEMPOTENT)
+@mcp.tool(annotations=QUERY)
 async def list_duplicate_candidates(
     project: ProjectName = None,
     run_id: Annotated[RunId | None, Field(description="Only pairs involving this run's articles")] = None,
-    limit: Annotated[int, Field(ge=1, le=100)] = 20,
+    limit: Annotated[int, Field(ge=1, le=100, description="Most pairs")] = 20,
 ) -> dict[str, Any]:
-    """List entity pairs that may be the same thing, with an example mention of each."""
+    """List pending entity pairs that may be the same thing, with an example mention of each; decide
+    them with resolve_duplicates. Reads only (may create the project database)."""
     return await _run(lambda: wiki.list_duplicate_candidates(projects.get_project(project), run_id, limit))
 
 
@@ -410,21 +421,23 @@ async def resolve_duplicates(
     decisions: Annotated[list[DuplicateDecision], Field(min_length=1, max_length=50)],
     project: ProjectName = None,
 ) -> dict[str, Any]:
-    """Merge or keep distinct pairs of possible duplicate entities. Rules: guide("duplicates")."""
+    """Decide pairs from list_duplicate_candidates: merge (irreversible; keep picks the survivor) or
+    distinct (not suggested again). Rules: guide("duplicates")."""
     payload = [decision.model_dump() for decision in decisions]
     return await _run(lambda: wiki.resolve_duplicates(projects.get_project(project), payload))
 
 
 @mcp.tool(annotations=LOCAL_UPDATE)
 async def merge_entities(
-    keep_id: int,
+    keep_id: Annotated[int, Field(description="Entity that remains (id from find_entities)")],
     merge_ids: Annotated[list[int], Field(max_length=10, description="Entities folded into keep_id; empty to only rename or retype")],
-    reason: Annotated[str, Field(min_length=1, max_length=400)],
+    reason: Annotated[str, Field(min_length=1, max_length=400, description="Why; kept in the merge log")],
     project: ProjectName = None,
-    canonical_name: str | None = None,
-    entity_type: EntityType | None = None,
+    canonical_name: Annotated[str | None, Field(description="New name for keep_id")] = None,
+    entity_type: Annotated[EntityType | None, Field(description="New type for keep_id")] = None,
 ) -> dict[str, Any]:
-    """Merge entities into one, and/or rename or retype an entity."""
+    """Merge entities into one (irreversible), and/or rename or retype an entity, by id. For pairs from
+    list_duplicate_candidates use resolve_duplicates."""
     return await _run(
         lambda: wiki.merge_entities(
             projects.get_project(project), keep_id, merge_ids,
@@ -441,7 +454,8 @@ async def next_synthesis(
         int | None, Field(ge=1, le=10, description="One-off override of the project's wiki.min_sources")
     ] = None,
 ) -> dict[str, Any]:
-    """Get the next entity whose wiki page needs writing, with its evidence from the project."""
+    """Get the next entity whose wiki page needs writing or updating, with its evidence; it repeats
+    until record_synthesis saves it. Rules: guide("synthesis")."""
 
     def pick() -> dict[str, Any]:
         owner = projects.locate(run_id)[0] if run_id and project is None else projects.get_project(project)
@@ -452,8 +466,8 @@ async def next_synthesis(
 
 @mcp.tool(annotations=LOCAL_UPDATE)
 async def record_synthesis(
-    entity_id: int,
-    input_digest: str,
+    entity_id: Annotated[int, Field(description="From next_synthesis")],
+    input_digest: Annotated[str, Field(description="From next_synthesis")],
     ctx: Context,
     summary: Annotated[str | None, Field(min_length=1, max_length=800, description="2-3 sentence overview; for an update only if it changes")] = None,
     synthesis: Annotated[str | None, Field(min_length=200, max_length=20000, description="New page: Markdown with '## ' sections, citing sources as [uid] and linking entities as [[Name]]")] = None,
@@ -465,8 +479,8 @@ async def record_synthesis(
     related_entities: Annotated[list[RelatedEntity] | None, Field(max_length=30)] = None,
     project: ProjectName = None,
 ) -> dict[str, Any]:
-    """Save a new entity page, or an update of a written one, from next_synthesis evidence.
-    Rules: guide("synthesis")."""
+    """Save an entity page from next_synthesis, replacing the stored one: a new page, or only the
+    changed sections of an update. Rules: guide("synthesis")."""
     return await _run(
         lambda **kwargs: wiki.record_synthesis(projects.get_project(project), **kwargs),
         entity_id=entity_id,
@@ -492,9 +506,10 @@ async def list_runs(project: ProjectName = None, limit: Annotated[int, Field(ge=
     return await _run(lambda: runs.list_runs(projects.get_project(project), limit))
 
 
-@mcp.tool(annotations=LOCAL_UPDATE_IDEMPOTENT)
+@mcp.tool(annotations=QUERY)
 async def get_run_status(run_id: RunId) -> dict[str, Any]:
-    """Show a run's progress in every stage and the available next steps."""
+    """Show a run's progress in every stage and the available next steps; check it rather than chat
+    history. Reads only (may create the project database)."""
 
     def status() -> dict[str, Any]:
         project, path = projects.locate(run_id)
@@ -535,7 +550,8 @@ async def bot_start(project: Annotated[str, Field(description="The bot project n
 
 @mcp.tool(annotations=NETWORK_UPDATE)
 async def bot_next(project: Annotated[str, Field(description="The bot project named in the job's prompt")]) -> dict[str, Any]:
-    """The next step of a bot run (screen, fetch, wiki tasks or finish); do what its `do` says."""
+    """Advance a bot run after bot_start: returns the next step (wait, triage, screen, fetch, wiki or
+    finish) with a `do` naming the tools to call. Repeat until finish."""
     return await _run(bot.bot_next, project)
 
 
