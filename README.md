@@ -1,6 +1,7 @@
 # med-lit-mcp
 
 [![M8ven Score](https://m8ven.ai/badge/mcp/junhewk/med-lit-mcp)](https://m8ven.ai/mcp/junhewk/med-lit-mcp?s=readme)
+[![med-lit-mcp MCP server – quality and maintenance score on Glama](https://glama.ai/mcp/servers/junhewk/med-lit-mcp/badges/score.svg)](https://glama.ai/mcp/servers/junhewk/med-lit-mcp)
 [![PyPI](https://img.shields.io/pypi/v/med-lit-mcp)](https://pypi.org/project/med-lit-mcp/)
 [![Python](https://img.shields.io/badge/python-%3E%3D3.11-blue?logo=python)](https://pypi.org/project/med-lit-mcp/)
 [![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue)](https://github.com/junhewk/med-lit-mcp/blob/main/LICENSE)
