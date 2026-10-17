@@ -9,7 +9,7 @@
 | ChatGPT desktop Work/Codex on Windows x64 | `Install med-lit.bat` | Local browser form | Pinned PyPI version |
 | ChatGPT desktop Work/Codex on macOS | Signed `med-lit-macos-<version>.dmg` | Local browser form | Bundled matching wheel |
 
-See the [user installation steps](../README.md#install). Hosted Chat and mobile cannot run this local server. med-lit does not require a hosted service or plugin listing. The former setup plugin and Mac `.command` launcher have been removed: Apple rejected the script archive for notarization and Finder blocked downloaded launch.
+See the [user installation steps](setup.md). Hosted Chat and mobile cannot run this local server. med-lit does not require a hosted service or plugin listing. The former setup plugin and Mac `.command` launcher have been removed: Apple rejected the script archive for notarization and Finder blocked downloaded launch.
 
 ## Shared implementation
 
