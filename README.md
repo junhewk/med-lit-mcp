@@ -11,7 +11,7 @@ med-lit-mcp is an MCP server for medical literature reviews. It takes a review t
 
 Your MCP client's model does the reading and writing (screening decisions, entity extraction, syntheses). med-lit-mcp searches the databases (PubMed, PMC, OpenAlex, Europe PMC, Semantic Scholar, Scopus), stores everything, checks the model's work against the source text, and exports the wiki. Every screening decision, extracted mention and synthesis citation must be a verbatim quote or a reference to the stored text.
 
-- **Clients:** Hermes (terminal and Desktop), Claude Code, Claude Desktop, Codex and ChatGPT desktop Work/Codex.
+- **Clients:** Hermes (terminal and Desktop), Claude Code, Claude Desktop, Codex, pi and ChatGPT desktop Work/Codex.
 - **Platforms:** Linux, macOS and Windows.
 - **Requirements:** a contact email (`NCBI_EMAIL`). No embedding endpoint, model API key or build step.
 - **Bots:** with Hermes, a scheduled bot can keep a review up to date by screening new articles and adding them to the wiki.
@@ -20,7 +20,7 @@ Your MCP client's model does the reading and writing (screening decisions, entit
 
 | Client | How |
 | --- | --- |
-| Hermes, Claude Code, Codex | `uvx med-lit-mcp setup` (needs [uv](https://docs.astral.sh/uv/getting-started/installation/)) |
+| Hermes, Claude Code, Codex, pi | `uvx med-lit-mcp setup` (needs [uv](https://docs.astral.sh/uv/getting-started/installation/)); for pi see [med-lit in pi](https://github.com/junhewk/med-lit-mcp/blob/main/docs/pi.md) |
 | Claude Desktop | Install `med-lit-<version>.mcpb` from the [latest release](https://github.com/junhewk/med-lit-mcp/releases/latest) under **Settings → Extensions**, then switch it on |
 | ChatGPT desktop (macOS, Windows x64) | Run `med-lit-macos-<version>.dmg` or `Install med-lit.bat` from the [latest release](https://github.com/junhewk/med-lit-mcp/releases/latest) and fill in the browser form |
 
@@ -47,6 +47,7 @@ Each review is a self-contained project folder. Open it in Obsidian with *Open f
 | [Setup](https://github.com/junhewk/med-lit-mcp/blob/main/docs/setup.md) | Installing for each client, manual registration, updating |
 | [Configuration](https://github.com/junhewk/med-lit-mcp/blob/main/docs/configuration.md) | Email, keys and environment variables; per-review settings and defaults |
 | [Running a review](https://github.com/junhewk/med-lit-mcp/blob/main/docs/workflow.md) | Projects, how search, screening, fetch and wiki work, tools, the viewer |
+| [med-lit in pi](https://github.com/junhewk/med-lit-mcp/blob/main/docs/pi.md) | Registration, the optional pi package (research policy, scoped workers), recommended settings |
 | [Bots](https://github.com/junhewk/med-lit-mcp/blob/main/docs/bots.md) | Keeping a review up to date with Hermes scheduled jobs |
 | [The wiki](https://github.com/junhewk/med-lit-mcp/blob/main/docs/wiki.md) | Obsidian, entity types, roles and relationships, Simple Graph Builder |
 | [Ontology](https://github.com/junhewk/med-lit-mcp/blob/main/docs/ontology.md) | The full knowledge-graph contract and graph export format |

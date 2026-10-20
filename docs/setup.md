@@ -4,7 +4,7 @@ med-lit-mcp is on [PyPI](https://pypi.org/project/med-lit-mcp/) and runs through
 
 | Client | Installation | Email, folder and keys |
 | --- | --- | --- |
-| Hermes (terminal or Desktop), Claude Code, Codex | [CLI `setup`](#hermes-claude-code-and-codex-cli-setup) | Terminal prompts |
+| Hermes (terminal or Desktop), Claude Code, Codex, pi | [CLI `setup`](#hermes-claude-code-and-codex-cli-setup) | Terminal prompts |
 | Claude Desktop | [`.mcpb` extension](#claude-desktop-no-command-line) | Claude's settings form |
 | ChatGPT desktop Work/Codex on Windows x64 | [`Install med-lit.bat`](#chatgpt-desktop-download-and-open-the-installer) | Local browser form |
 | ChatGPT desktop Work/Codex on macOS | [Signed, notarized `.dmg`](#chatgpt-desktop-download-and-open-the-installer) | Local browser form |
@@ -19,7 +19,7 @@ uvx med-lit-mcp setup
 
 Setup asks for your contact email (needed for PubMed and Unpaywall), a folder for your reviews (default `~/med-lit`), optionally API keys, and optionally your default [review settings](configuration.md#review-settings), including how many articles a Hermes bot screens per run. Each key is typed with hidden input, tested against its provider right away, and saved in `~/.config/med-lit-mcp/keys.json`, a file only you can read. Keys never go into the chat or into the clients' configuration files.
 
-Setup then registers med-lit with every Hermes, Claude Code and Codex CLI it finds on the machine. Hermes Desktop uses the same Hermes configuration, so this registers it too, even when the Desktop's `hermes` command is not on your `PATH`; start a new chat (or `/reload-mcp`) to load the tools. Hermes Desktop ships its own uv, so without uv of your own you can run `~/.hermes/bin/uvx med-lit-mcp setup`. Either way med-lit runs in its own uv environment, separate from Hermes's Python.
+Setup then registers med-lit with every Hermes, Claude Code, Codex and pi CLI it finds on the machine. For pi it writes only the `med-lit` entry of pi's `mcp.json`; the optional pi package is installed with `pi install` ([med-lit in pi](pi.md)). Hermes Desktop uses the same Hermes configuration, so this registers it too, even when the Desktop's `hermes` command is not on your `PATH`; start a new chat (or `/reload-mcp`) to load the tools. Hermes Desktop ships its own uv, so without uv of your own you can run `~/.hermes/bin/uvx med-lit-mcp setup`. Either way med-lit runs in its own uv environment, separate from Hermes's Python.
 
 Manage keys later without rerunning setup:
 
@@ -30,7 +30,7 @@ uvx med-lit-mcp keys test         # check every key against its provider
 uvx med-lit-mcp keys remove openalex
 ```
 
-For unattended use: `uvx med-lit-mcp setup --email you@example.org --yes` accepts the defaults, skips the key questions and registers with every client found; `--client hermes`, `--client claude-code` or `--client codex` limits it to one. `--yes` also accepts replacing an existing registration.
+For unattended use: `uvx med-lit-mcp setup --email you@example.org --yes` accepts the defaults, skips the key questions and registers with every client found; `--client hermes`, `--client claude-code`, `--client codex` or `--client pi` limits it to one. `--yes` also accepts replacing an existing registration.
 
 ### Codex
 
