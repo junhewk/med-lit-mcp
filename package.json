@@ -1,6 +1,6 @@
 {
   "name": "med-lit-pi",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "med-lit for pi: the research policy in med-lit study folders and fresh workers for wiki tasks. The MCP server itself is the Python package med-lit-mcp.",
   "keywords": ["pi-package"],

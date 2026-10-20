@@ -4,9 +4,8 @@ import os
 import unittest
 from unittest import mock
 
-from mcp.shared.memory import create_connected_server_and_client_session
-
 from helpers import RECORD, Case, record
+from mcp.shared.memory import create_connected_server_and_client_session
 
 from med_lit_mcp import fetch, screening, triage
 from med_lit_mcp.limits import encoded_size, response_bytes

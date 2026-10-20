@@ -19,17 +19,19 @@ jobs:
       - uses: astral-sh/setup-uv@v10.2.0
       - name: Run tests
         run: uv run pytest
-      - name: Check Windows bootstrap syntax
+      - name: Run the install script from this checkout
+        if: runner.os != 'Windows'
+        env:
+          MED_LIT_CONFIG_DIR: ${{ runner.temp }}/med-lit-config
+          MED_LIT_STATE_DIR: ${{ runner.temp }}/med-lit-state
+        run: scripts/install.sh --dev "$GITHUB_WORKSPACE" --email ci@example.org --yes --no-register
+      - name: Run the install script from this checkout (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          $parseErrors = $null
-          $tokens = $null
-          [System.Management.Automation.Language.Parser]::ParseInput(
-            (Get-Content -Raw "$PWD/installers/windows-bootstrap.ps1").Replace('@VERSION@', '0.0.0'),
-            [ref]$tokens, [ref]$parseErrors
-          ) | Out-Null
-          if ($parseErrors.Count) { $parseErrors | Write-Error; exit 1 }
+        env:
+          MED_LIT_CONFIG_DIR: ${{ runner.temp }}\med-lit-config
+          MED_LIT_STATE_DIR: ${{ runner.temp }}\med-lit-state
+        run: ./scripts/install-windows.ps1 -Dev "$env:GITHUB_WORKSPACE" -Email ci@example.org -Yes -NoRegister
   build:
     needs: test
     runs-on: ubuntu-latest
@@ -66,7 +68,7 @@ jobs:
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
 
-  desktop-installers:
+  claude-extension:
     needs: publish
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
@@ -77,11 +79,7 @@ jobs:
       - uses: astral-sh/setup-uv@v10.2.0
       - name: Build the Claude Desktop extension
         run: uv run python scripts/build_mcpb.py dist-extension
-      # macOS releases use build_macos_installer.py on the signing Mac's Keychain.
-      # Its notarized DMG and SHA256SUMS-macos are attached separately after validation.
-      - name: Build the Windows ChatGPT local installer
-        run: uv run python scripts/build_windows_installer.py dist-installers
-      - name: Attach desktop installers to the release
+      - name: Attach the Claude Desktop extension to the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${GITHUB_REF_NAME}" dist-extension/*.mcpb dist-installers/*.bat dist-installers/SHA256SUMS --clobber
+        run: gh release upload "${GITHUB_REF_NAME}" dist-extension/*.mcpb --clobber

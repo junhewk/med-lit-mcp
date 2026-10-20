@@ -20,11 +20,11 @@ Your MCP client's model does the reading and writing (screening decisions, entit
 
 | Client | How |
 | --- | --- |
-| Hermes, Claude Code, Codex, pi | `uvx med-lit-mcp setup` (needs [uv](https://docs.astral.sh/uv/getting-started/installation/)); for pi see [med-lit in pi](https://github.com/junhewk/med-lit-mcp/blob/main/docs/pi.md) |
+| Hermes, Claude Code, Codex, pi | Run the install script: [`scripts/install.sh`](https://github.com/junhewk/med-lit-mcp/blob/main/scripts/install.sh) on macOS and Linux, [`scripts/install-windows.ps1`](https://github.com/junhewk/med-lit-mcp/blob/main/scripts/install-windows.ps1) on Windows. Or run `uvx med-lit-mcp setup`. Both need [uv](https://docs.astral.sh/uv/getting-started/installation/). For pi see [med-lit in pi](https://github.com/junhewk/med-lit-mcp/blob/main/docs/pi.md) |
+| ChatGPT desktop Work/Codex (macOS, Windows) | The same install script with `--chatgpt` (Windows: `-ChatGPT`), then fill in the browser form |
 | Claude Desktop | Install `med-lit-<version>.mcpb` from the [latest release](https://github.com/junhewk/med-lit-mcp/releases/latest) under **Settings → Extensions**, then switch it on |
-| ChatGPT desktop (macOS, Windows x64) | Run `med-lit-macos-<version>.dmg` or `Install med-lit.bat` from the [latest release](https://github.com/junhewk/med-lit-mcp/releases/latest) and fill in the browser form |
 
-Setup asks for your email, a folder for your reviews (default `~/med-lit`) and optional database API keys. Keys are stored in private local files, never in the chat. See [Setup](https://github.com/junhewk/med-lit-mcp/blob/main/docs/setup.md) for every client, manual registration and updating.
+The same script installs and updates. Setup asks for your email, a folder for your reviews (default `~/med-lit`) and optional database API keys. Keys are stored in private local files, never in the chat. See [Setup](https://github.com/junhewk/med-lit-mcp/blob/main/docs/setup.md) for every client, manual registration and updating.
 
 ## Use
 
@@ -40,9 +40,14 @@ Talk to your agent. It starts each stage only when you ask and confirms the sear
 
 Each review is a self-contained project folder. Open it in Obsidian with *Open folder as vault*.
 
+## What's new in 0.2.1
+
+- **Install scripts replace the desktop installers.** `scripts/install.sh` (macOS, Linux) and `scripts/install-windows.ps1` (Windows) install and update med-lit for every terminal client, and with `--chatgpt` for ChatGPT desktop. They need [uv](https://docs.astral.sh/uv/getting-started/installation/). The signed macOS `.dmg` and the Windows `Install med-lit.bat` are no longer built. The Claude Desktop `.mcpb` stays.
+- `setup --dev` stops with a clear message when uv is not on `PATH`, instead of registering a command that cannot start.
+
 ## What's new in 0.2.0
 
-- **pi support.** `uvx med-lit-mcp setup --client pi` adds med-lit to pi's `mcp.json`. It writes only med-lit's own entry and leaves pi's model, sign-in and settings alone. An optional pi package (`pi install git:github.com/junhewk/med-lit-mcp@v0.2.0`) adds two things: the research policy in study folders, and fresh subagent workers that get only the tools their task names. See [med-lit in pi](https://github.com/junhewk/med-lit-mcp/blob/main/docs/pi.md).
+- **pi support.** `uvx med-lit-mcp setup --client pi` adds med-lit to pi's `mcp.json`. It writes only med-lit's own entry and leaves pi's model, sign-in and settings alone. An optional pi package (`pi install git:github.com/junhewk/med-lit-mcp@v<version>`) adds two things: the research policy in study folders, and fresh subagent workers that get only the tools their task names. See [med-lit in pi](https://github.com/junhewk/med-lit-mcp/blob/main/docs/pi.md).
 - **Batches that fit the client.**
   - Screening, triage and wiki-task results are sized by the bytes the client actually receives (default 18 KiB, `MED_LIT_RESPONSE_BYTES`), so a client that cuts long tool results (pi at 20 KiB) gets every abstract whole.
   - A single record too large on its own is sent with its abstract cut at a word boundary and marked.
@@ -66,8 +71,8 @@ These changes came from comparing hosts on a pilot review: Hermes left subagents
 | [The wiki](https://github.com/junhewk/med-lit-mcp/blob/main/docs/wiki.md) | Obsidian, entity types, roles and relationships, Simple Graph Builder |
 | [Ontology](https://github.com/junhewk/med-lit-mcp/blob/main/docs/ontology.md) | The full knowledge-graph contract and graph export format |
 | [Development](https://github.com/junhewk/med-lit-mcp/blob/main/docs/development.md) | Running from a checkout, tests, compatibility |
-| [Installation and release](https://github.com/junhewk/med-lit-mcp/blob/main/docs/installation.md) | Building and signing the installers |
-| [Validation](https://github.com/junhewk/med-lit-mcp/blob/main/docs/validation.md) | Platform and installer test records |
+| [Installation and release](https://github.com/junhewk/med-lit-mcp/blob/main/docs/installation.md) | The install scripts, the Claude Desktop extension, releasing |
+| [Validation](https://github.com/junhewk/med-lit-mcp/blob/main/docs/validation.md) | Platform test records, including the earlier desktop installers |
 
 ## License
 

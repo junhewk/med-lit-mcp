@@ -4,62 +4,90 @@
 
 | User | Entry point | Settings | Package source |
 | --- | --- | --- | --- |
-| Codex, Hermes, Claude Code | `uvx med-lit-mcp setup --client <client>` | Terminal prompts | PyPI |
+| Hermes, Claude Code, Codex, pi on macOS or Linux | `scripts/install.sh` (or `uvx med-lit-mcp setup`) | Terminal prompts | PyPI, newest release |
+| Hermes, Claude Code, Codex, pi on Windows | `scripts\install-windows.ps1` (or `uvx med-lit-mcp setup`) | Terminal prompts | PyPI, newest release |
+| ChatGPT desktop Work/Codex | The same scripts with `--chatgpt` / `-ChatGPT` | Local browser form | PyPI release matching the form |
 | Claude Desktop | `med-lit-<version>.mcpb` | Claude extension form | PyPI |
-| ChatGPT desktop Work/Codex on Windows x64 | `Install med-lit.bat` | Local browser form | Pinned PyPI version |
-| ChatGPT desktop Work/Codex on macOS | Signed `med-lit-macos-<version>.dmg` | Local browser form | Bundled matching wheel |
 
-See the [user installation steps](setup.md). Hosted Chat and mobile cannot run this local server. med-lit does not require a hosted service or plugin listing. The former setup plugin and Mac `.command` launcher have been removed: Apple rejected the script archive for notarization and Finder blocked downloaded launch.
+See the [user installation steps](setup.md). Hosted Chat and mobile cannot run this local server.
+
+Until 0.2.0, ChatGPT desktop users had a signed macOS `.dmg` and a Windows `Install med-lit.bat`.
+These installers downloaded a pinned uv and opened the browser form. From 0.2.1 the two install
+scripts replace them, and uv is a prerequisite. The earlier installers' test records stay in
+[validation](validation.md).
+
+## The install scripts
+
+`scripts/install.sh` (macOS and Linux) and `scripts/install-windows.ps1` (Windows) do the same steps,
+and the same command installs and updates:
+
+1. **Check uv.** If uv is missing, the script prints the official install command for the system and
+   stops.
+2. **Pick the server.** It runs the newest med-lit-mcp from PyPI (`uvx med-lit-mcp@latest`), which
+   also makes it what clients start. With `--dev CHECKOUT` / `-Dev`, it runs a source checkout
+   instead (`uv run --directory CHECKOUT med-lit-mcp`).
+3. **Run setup.** `med-lit-mcp setup` saves the email, reviews folder and optional keys and registers
+   the server with the clients found, or with the ones named by `--client` / `-Client`. With
+   `--chatgpt` / `-ChatGPT` it opens the browser form instead (`setup --ui --client chatgpt`). Other
+   options pass through: `--email`, `--projects-dir`, `--yes`, `--no-register`.
+4. **Check.** It runs `med-lit-mcp --check` and prints the saved configuration as the server reads it.
+
+Details:
+
+- **No checkout needed.** The scripts do not depend on a checkout: a downloaded single file works.
+- **Piped scripts.** `install.sh` is written for the bash 3.2 that macOS ships. When the script
+  itself arrives through a pipe, setup reads its prompts from the terminal.
+- **Windows PowerShell.** `install-windows.ps1` runs in Windows PowerShell 5.1 and PowerShell 7.
 
 ## Shared implementation
 
-- `cli_setup.py` owns command parsing and CLI prompts. Only ChatGPT uses `setup --ui`.
-- `setup_ui.py` serves the browser form on loopback, opens the browser asynchronously, saves settings, registers the connection and verifies actual MCP initialization, tool listing and the workflow guide. Ready requires that verification to pass.
-- `clients.py` writes the native med-lit entry in `$CODEX_HOME/config.toml` or `~/.codex/config.toml`, preserving unrelated TOML settings and comments. Registration uses an absolute launcher and 180-second startup / 600-second tool timeouts. Changing an existing connection requires a replacement choice.
-- `installation.py` validates the matching portable wheel for both the Mac builder and browser setup.
-- Existing configuration and key storage are shared by CLI and browser setup. Private files contain credentials; client configuration contains the launch command. Reviews remain local. Blank key fields keep saved keys; removal is explicit.
-- `platforms.py` contains Windows/Unix file protection and process handling. Review locking uses `portalocker` on all three systems.
+- **`cli_setup.py`** owns command parsing and the terminal prompts. Only ChatGPT uses `setup --ui`.
+- **`setup_ui.py`** serves the browser form on loopback and opens the browser asynchronously. It then
+  saves settings, registers the connection and verifies the actual MCP initialization, tool listing
+  and workflow guide. Ready requires that verification to pass. The registered command runs the
+  PyPI release matching the form (`uv tool run --python 3.11 --from med-lit-mcp==<version>`) with an
+  absolute uv. After an update the registration differs, so the form asks before replacing it.
+- **`clients.py`** writes the native med-lit entry:
+  - **Codex:** `$CODEX_HOME/config.toml` or `~/.codex/config.toml`, keeping unrelated TOML and
+    comments. It uses an absolute launcher, a 180-second startup timeout and a 600-second tool
+    timeout.
+  - **pi:** `mcp.json` (see [med-lit in pi](pi.md)).
 
-The form checks Host, Origin and an unpredictable session token, and expires after 15 minutes of inactivity. Closing before Save changes no settings. Setup may retain a downloaded runtime. After a connection failure, the user can retry without reentering saved settings.
+  Changing an existing connection requires a replacement choice.
+- **Keys and settings.** The CLI and the browser form share the existing configuration and key
+  storage. Credentials sit in private files; client configuration holds only the launch command.
+  Reviews remain local. Blank key fields keep saved keys; removing one is explicit.
+- **`platforms.py`** holds Windows/Unix file protection and process handling. Review locking uses
+  `portalocker` on all three systems.
 
-The launchers reuse an existing uv or download uv **0.12.21** over HTTPS with a pinned SHA-256 check. uv installs managed Python 3.11 and dependencies without administrator access or system Python changes. Runtime folders are `~/Library/Application Support/med-lit-mcp/runtime` on Mac and `%LOCALAPPDATA%/med-lit-mcp/runtime` on Windows.
-
-The Mac app supplies progress, Retry, Cancel and optional Details, and owns the setup process group. Its bootstrap verifies and copies the wheel into `runtime/packages/<version>/<digest>/`. Registration uses that persistent path, so ejecting the disk image or moving the installer does not break MCP startup. Windows runs inline PowerShell from the batch launcher.
+The form checks Host, Origin and an unpredictable session token, and expires after 15 minutes of
+inactivity. Closing it before Save changes no settings. After a connection failure, the user can
+retry without re-entering saved settings.
 
 ## Build
 
-Windows and Claude artifacts can be built from any development checkout:
+The Claude Desktop extension can be built from any development checkout:
 
 ```bash
-uv run python scripts/build_windows_installer.py dist-installers
 uv run python scripts/build_mcpb.py dist-extension
 ```
 
-The Windows builder emits only `Install med-lit.bat` and `SHA256SUMS`. Publish the matching PyPI version before distributing Windows or Claude artifacts.
-
-Run the Mac builder in GUI Terminal on the signing Mac, where the Developer ID key and existing notarization profile are accessible:
-
-```bash
-uv run python scripts/build_macos_installer.py dist-macos \
-  --sign-identity "Developer ID Application: Junhewk Kim (5AVW8WCFJ2)" \
-  --notary-profile med-lit-notarization
-```
-
-This builds the current portable wheel and universal arm64/x86_64 launcher, signs the app and DMG, submits to Apple, staples the accepted result and checks Gatekeeper assessment. Output is the DMG, `SHA256SUMS-macos`, and a notarization JSON report. Failed or pending candidates and logs stay under `.notarization/`; final release filenames are written only after acceptance and validation. Private keys stay in Keychain. An explicit `--unsigned` produces a separately named development artifact.
+Publish the matching PyPI version before distributing it.
 
 ## Release
 
-1. Review and test the same versioned source on Linux, native macOS and native Windows. Check the [remaining release gates](validation.md#release-gates).
-2. Build and validate the signed Mac DMG from that source. The builder does not publish anything.
-3. Publish the matching GitHub release. The release workflow runs the three-platform test matrix, checks the tag/version, builds and publishes PyPI, then attaches Claude and Windows assets.
-4. Attach the validated DMG and `SHA256SUMS-macos` to the same release. This local signing process needs no private-key export or GitHub signing secret.
-5. Test the downloaded public Windows batch against the published version before announcing it to users.
+1. **Test.** Review and test the versioned source; see the [release gates](validation.md#release-gates).
+2. **Publish the matching GitHub release.** The release workflow then:
+   1. runs the test suite on Linux, macOS and Windows;
+   2. runs each install script there from the checkout (`--dev`, without registering);
+   3. checks that the tag matches the version;
+   4. builds and publishes PyPI;
+   5. attaches the Claude Desktop extension.
 
 ## Development
 
 ```bash
-uv run med-lit-mcp setup --ui --client chatgpt --dev .
+scripts/install.sh --dev . --client codex          # or: scripts\install-windows.ps1 -Dev . -Client codex
+scripts/install.sh --dev . --chatgpt               # the browser form, from this checkout
 uv run pytest
 ```
-
-The generated Windows batch also accepts `--dev "C:\path\to\checkout"`. Mac production-artifact tests use the launcher's explicit `--test-state-dir` option to isolate configuration, reviews, registration, caches and runtime. These test options do not change the ordinary user flow.

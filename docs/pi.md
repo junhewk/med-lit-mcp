@@ -21,7 +21,7 @@ default `~/.pi/agent`) and leaves every other server and setting in the file as 
 ## 2. The package (optional): research policy and fresh workers
 
 ```bash
-pi install git:github.com/junhewk/med-lit-mcp@v0.2.0   # the tag matching your med-lit-mcp version
+pi install git:github.com/junhewk/med-lit-mcp@v0.2.1   # the tag matching your med-lit-mcp version
 ```
 
 The package is one extension. It is not part of the Python package.

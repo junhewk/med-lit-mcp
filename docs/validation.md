@@ -1,8 +1,8 @@
 # Validation status
 
-The consolidated source uses four installation routes described in [Installation and release](installation.md). Linux, Mac and Windows development checkouts are synchronized. Version 0.1.6 is the first release with the ChatGPT installers.
+Since 0.2.1, installation runs through two install scripts (`scripts/install.sh`, `scripts/install-windows.ps1`) and the Claude Desktop extension, described in [Installation and release](installation.md). The signed macOS DMG and the Windows batch were removed; the desktop evidence below is their historical record (0.1.6 to 0.2.0). Linux, Mac and Windows development checkouts are synchronized. Version 0.1.6 is the first release with the ChatGPT installers.
 
-## Desktop evidence
+## Desktop evidence (installers removed in 0.2.1)
 
 | Scope | Verified | Remaining scope |
 | --- | --- | --- |
@@ -38,7 +38,7 @@ Release commit `1ebb68e` passed the local Linux suite (231 tests, 8 skips) and t
 
 An isolated installation of the published PyPI 0.1.8 package exposed all 31 tools with four explicit boolean annotations. The public Windows and Mac downloads matched their published SHA-256 manifests. The Windows launcher and Claude bundle both pin `med-lit-mcp==0.1.8`.
 
-## Current Mac build
+## Last Mac build (0.1.8)
 
 The released `med-lit-macos-0.1.8.dmg` was built on the signing Mac from release commit `1ebb68e`; the launcher and build scripts are unchanged since 0.1.6:
 
@@ -95,6 +95,5 @@ their native checks were not repeated for this release.
 
 ## Release gates
 
-- Test the unmodified Windows batch downloaded from the public release. Existing desktop tests used isolated developer settings and local files.
-- Mac runtime execution has been tested on ARM64. The Intel slice is compiled and inspected but has not run on an Intel host.
-- Actual desktop tests supplement automated tests; source-checkout tests do not establish public download behavior.
+- **Script runs.** Release CI runs both install scripts from the checkout, without registering, on Linux, macOS and Windows. A run that registers with real clients (Hermes, Codex, pi) and the ChatGPT browser form is checked by hand on the platforms available before a release, and recorded here.
+- **Source versus download.** Tests run from the source checkout do not establish the behaviour of a downloaded script. Before announcing a release, run the script downloaded from the public repository against the published PyPI version.

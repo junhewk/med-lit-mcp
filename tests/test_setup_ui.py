@@ -5,57 +5,19 @@ import sys
 import threading
 import urllib.error
 import urllib.request
-import zipfile
 from argparse import Namespace
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import anyio
-import tomlkit
 from helpers import Case
 
 from med_lit_mcp import __version__, cli_setup, clients, keys
-from med_lit_mcp.setup_ui import SettingsError, SetupServer, check_connection, ui_command
-
-
-class BundledPackageTests(Case):
-    def wheel(self, *, name='med-lit-mcp', version=__version__):
-        package = self.root / 'persistent runtime 한글' / f'med_lit_mcp-{__version__}-py3-none-any.whl'
-        package.parent.mkdir(exist_ok=True)
-        with zipfile.ZipFile(package, 'w') as archive:
-            archive.writestr(f'med_lit_mcp-{__version__}.dist-info/METADATA',
-                            f'Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n')
-        return package
-
-    def test_bundled_package_registration_uses_persistent_wheel(self):
-        package = self.wheel()
-        command = ui_command(Namespace(dev=None, launcher=sys.executable, package=str(package)))
-        self.assertEqual(command, [str(Path(sys.executable).resolve()),
-                                  'tool', 'run', '--python', '3.11', '--from', str(package.resolve()), 'med-lit-mcp'])
-        clients.register_codex(command)
-        config = clients.codex_config().read_text(encoding='utf-8')
-        self.assertIn(str(package.resolve()), tomlkit.parse(config)['mcp_servers']['med-lit']['args'])
-        self.assertNotIn('--directory', config)
-        self.assertNotIn(f'med-lit-mcp=={__version__}', config)
-
-    def test_invalid_bundled_packages_are_rejected_before_registration(self):
-        package = self.wheel()
-        package.write_bytes(b'invalid wheel')
-        with self.assertRaises(SettingsError):
-            ui_command(Namespace(dev=None, launcher=sys.executable, package=str(package)))
-        self.assertFalse(clients.codex_config().exists())
-        self.assertEqual(keys.read_config(), {})
-
-    def test_installer_package_flag_is_only_for_ui_and_not_source_development(self):
-        package = self.wheel()
-        with patch('med_lit_mcp.setup_ui.main', return_value=0) as setup:
-            self.assertEqual(cli_setup.main(['setup', '--ui', '--client', 'chatgpt', '--package', str(package)]), 0)
-            self.assertEqual(setup.call_args.args[0].package, str(package))
-        for args in (['setup', '--package', str(package)],
-                     ['setup', '--ui', '--package', str(package), '--dev', str(self.root)]):
-            with self.subTest(args=args), self.assertRaises(SystemExit) as error:
-                cli_setup.main(args)
-            self.assertEqual(error.exception.code, 2)
+from med_lit_mcp.setup_ui import (
+    SettingsError,
+    SetupServer,
+    check_connection,
+    ui_command,
+)
 
 
 class SetupUITests(Case):
@@ -197,7 +159,6 @@ class SetupUITests(Case):
 
 class BrowserStartupTests(Case):
     def test_blocking_browser_launcher_does_not_block_settings_http(self):
-        from argparse import Namespace
         from med_lit_mcp import setup_ui
         browser_started = threading.Event()
         release_browser = threading.Event()
@@ -242,3 +203,22 @@ class BrowserStartupTests(Case):
                 release_browser.set()
                 server.finished.set()
                 worker.join(timeout=3)
+
+
+class UICommandTests(Case):
+    def test_the_form_registers_the_matching_pypi_release_with_an_absolute_uv(self):
+        uv = self.root / "bin" / "uv"
+        uv.parent.mkdir()
+        uv.write_text("")
+        with patch("med_lit_mcp.setup_ui.shutil.which", return_value=str(uv)):
+            command = ui_command(Namespace(dev=None))
+        self.assertEqual(command, [str(uv.resolve()), "tool", "run", "--python", "3.11", "--from", f"med-lit-mcp=={__version__}", "med-lit-mcp"])
+
+    def test_missing_uv_is_reported_before_anything_is_saved(self):
+        with patch("med_lit_mcp.setup_ui.shutil.which", return_value=None), self.assertRaisesRegex(SettingsError, "install script"):
+            ui_command(Namespace(dev=None))
+        self.assertEqual(keys.read_config(), {})
+
+    def test_a_source_checkout_needs_uv_on_path(self):
+        with patch("med_lit_mcp.cli_setup.shutil.which", return_value=None), self.assertRaisesRegex(SystemExit, "uv was not found"):
+            cli_setup.server_command(str(self.root))

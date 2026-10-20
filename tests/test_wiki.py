@@ -545,7 +545,11 @@ class ContractTests(Case):
             self.assertIn(f"- {name}:", contract)
 
     def test_guide_tasks_and_header_carry_the_same_contract(self) -> None:
-        from med_lit_mcp.contracts import EXTRACTION_REMINDER, TASK_TOOLS, extraction_contract
+        from med_lit_mcp.contracts import (
+            EXTRACTION_REMINDER,
+            TASK_TOOLS,
+            extraction_contract,
+        )
         from med_lit_mcp.guides import GUIDES
 
         run_id = self.make_run([record(1, title="Oncology SDM")])

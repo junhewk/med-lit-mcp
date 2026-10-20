@@ -27,7 +27,6 @@ from mcp.shared.exceptions import McpError
 from . import __version__, clients, keys
 from .cli_setup import EMAIL, server_command
 from .config import projects_dir, user_path
-from .installation import validate_wheel
 from .store import file_lock
 
 
@@ -92,20 +91,10 @@ async def check_connection(command: list[str]) -> dict:
 def ui_command(args: argparse.Namespace) -> list[str]:
     if args.dev:
         return server_command(args.dev)
-    launcher = args.launcher or shutil.which("uv")
+    launcher = shutil.which("uv")
     if not launcher or not Path(launcher).is_absolute() or not Path(launcher).is_file():
-        raise SettingsError("The setup runtime was not found. Reopen the med-lit installer to retry.")
-    package = getattr(args, "package", None)
-    source = f"med-lit-mcp=={__version__}"
-    if package:
-        # A signed installer keeps its wheel outside the mounted download, so
-        # native clients can start the same version after the disk is ejected.
-        try:
-            wheel = validate_wheel(package)
-        except ValueError as exc:
-            raise SettingsError("The installer package is missing or invalid. Reopen the med-lit installer to repair it.") from exc
-        source = str(wheel)
-    return [str(Path(launcher).resolve()), "tool", "run", "--python", "3.11", "--from", source, "med-lit-mcp"]
+        raise SettingsError("uv was not found. Install uv, then run the med-lit install script again.")
+    return [str(Path(launcher).resolve()), "tool", "run", "--python", "3.11", "--from", f"med-lit-mcp=={__version__}", "med-lit-mcp"]
 
 
 class SetupServer(ThreadingHTTPServer):
@@ -155,7 +144,7 @@ class SetupHandler(BaseHTTPRequestHandler):
             self.respond(403, {"error": "Cross-origin requests are not allowed."})
             return False
         if api and not secrets.compare_digest(self.headers.get("X-Med-Lit-Token", ""), self.server.token):
-            self.respond(403, {"error": "This settings session has expired. Reopen the med-lit installer."})
+            self.respond(403, {"error": "This settings session has expired. Run the med-lit install script again."})
             return False
         self.server.last_activity = time.monotonic()
         return True

@@ -46,7 +46,9 @@ class Console:
 def server_command(dev: str | None) -> list[str]:
     """How clients start the server: uvx from PyPI, or `uv run` in a checkout for development."""
     if dev:
-        uv = shutil.which("uv") or "uv"
+        uv = shutil.which("uv")
+        if not uv:
+            raise SystemExit("uv was not found on PATH. Install uv first: https://docs.astral.sh/uv/getting-started/installation/")
         return [uv, "run", "--quiet", "--directory", str(Path(dev).expanduser().resolve()), "med-lit-mcp"]
     uvx = shutil.which("uvx") or _hermes_uvx()
     if not uvx:
@@ -282,11 +284,8 @@ def main(argv: list[str]) -> int:
     setup_parser.add_argument("--client", action="append", choices=("hermes", "claude-code", "codex", "pi", "chatgpt"),
                               help="Register with this client (repeatable); default: every one found")
     setup_parser.add_argument("--ui", action="store_true", help="Open the ChatGPT desktop settings form (no terminal prompts)")
-    setup_parser.add_argument("--launcher", help=argparse.SUPPRESS)  # Absolute uv path from the installer bootstrap.
-    source = setup_parser.add_mutually_exclusive_group()
-    source.add_argument("--package", help=argparse.SUPPRESS)  # Persistent bundled wheel from the signed installer.
     setup_parser.add_argument("--no-register", action="store_true", help="Only save settings and keys")
-    source.add_argument("--dev", metavar="CHECKOUT", help="Run the server from a source checkout (development)")
+    setup_parser.add_argument("--dev", metavar="CHECKOUT", help="Run the server from a source checkout (development)")
     setup_parser.add_argument("--yes", action="store_true", help="Accept defaults without asking (keys are skipped)")
     keys_parser = commands.add_parser("keys", help="Show, set, remove or test API keys")
     keys_parser.add_argument("action", nargs="?", choices=("list", "set", "remove", "test"))
@@ -297,10 +296,6 @@ def main(argv: list[str]) -> int:
             parser.error("--ui supports only --client chatgpt")
         if not args.ui and args.client and "chatgpt" in args.client:
             parser.error("--client chatgpt needs --ui")
-        if args.launcher and not args.ui:
-            parser.error("--launcher needs --ui")
-        if args.package and not args.ui:
-            parser.error("--package needs --ui")
     console = Console(getattr(args, "yes", False))
     try:
         return setup(args, console) if args.command == "setup" else keys_command(args, console)

@@ -1,17 +1,25 @@
 # Setup
 
-med-lit-mcp is on [PyPI](https://pypi.org/project/med-lit-mcp/) and runs through [`uv`](https://docs.astral.sh/uv/) ([install uv](https://docs.astral.sh/uv/getting-started/installation/) first if you don't have it). Claude Desktop and ChatGPT desktop users can skip the terminal entirely.
+med-lit-mcp is on [PyPI](https://pypi.org/project/med-lit-mcp/) and runs through [`uv`](https://docs.astral.sh/uv/) ([install uv](https://docs.astral.sh/uv/getting-started/installation/) first if you don't have it). Claude Desktop users can skip the terminal entirely.
 
 | Client | Installation | Email, folder and keys |
 | --- | --- | --- |
-| Hermes (terminal or Desktop), Claude Code, Codex, pi | [CLI `setup`](#hermes-claude-code-and-codex-cli-setup) | Terminal prompts |
+| Hermes (terminal or Desktop), Claude Code, Codex, pi | [Install script or CLI `setup`](#hermes-claude-code-codex-and-pi-install-script) | Terminal prompts |
+| ChatGPT desktop Work/Codex (macOS, Windows) | [Install script with `--chatgpt`](#chatgpt-desktop-install-script-and-browser-form) | Local browser form |
 | Claude Desktop | [`.mcpb` extension](#claude-desktop-no-command-line) | Claude's settings form |
-| ChatGPT desktop Work/Codex on Windows x64 | [`Install med-lit.bat`](#chatgpt-desktop-download-and-open-the-installer) | Local browser form |
-| ChatGPT desktop Work/Codex on macOS | [Signed, notarized `.dmg`](#chatgpt-desktop-download-and-open-the-installer) | Local browser form |
 
 To try the latest unreleased code, replace `med-lit-mcp` with `--from git+https://github.com/junhewk/med-lit-mcp med-lit-mcp` in any command.
 
-## Hermes, Claude Code and Codex: CLI setup
+## Hermes, Claude Code, Codex and pi: install script
+
+Download [`scripts/install.sh`](https://github.com/junhewk/med-lit-mcp/blob/main/scripts/install.sh) (macOS, Linux) or [`scripts/install-windows.ps1`](https://github.com/junhewk/med-lit-mcp/blob/main/scripts/install-windows.ps1) (Windows), or clone the repository, then run:
+
+```bash
+bash install.sh                                              # macOS, Linux
+powershell -ExecutionPolicy Bypass -File .\install-windows.ps1   # Windows
+```
+
+The same command installs and updates. The script needs uv: if uv is missing, it prints the command that installs it. It then runs the newest release's `med-lit-mcp setup` and checks the saved configuration. Options: `--client NAME` (repeatable: `hermes`, `claude-code`, `codex`, `pi`; default: every one found), `--email`, `--projects-dir`, `--yes`, `--no-register` (PowerShell: `-Client`, `-Email`, `-ProjectsDir`, `-Yes`, `-NoRegister`). The scripts only run `setup`, which you can also run yourself:
 
 ```bash
 uvx med-lit-mcp setup
@@ -40,21 +48,29 @@ uvx med-lit-mcp setup --client codex
 
 Setup writes only the `med-lit` entry in `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`), preserving other settings and comments. It uses an absolute launcher path, a 180-second startup timeout and a 600-second tool timeout. An identical connection is kept; a different connection requires a replacement choice. Restart the client or start a new session, then use `/mcp` to check the connection. The ChatGPT desktop app and Codex CLI share this native configuration on the same host. [Official MCP documentation](https://learn.chatgpt.com/docs/extend/mcp)
 
-## ChatGPT desktop: download and open the installer
+## ChatGPT desktop: install script and browser form
 
-This flow targets **desktop Work/Codex with local computer access** on macOS (Apple Silicon or Intel) and Windows x64. Hosted Chat and mobile do not run the local server.
+This flow targets **desktop Work/Codex with local computer access** on macOS and Windows. Hosted Chat and mobile do not run the local server.
 
-1. Download the installer from the [release page](https://github.com/junhewk/med-lit-mcp/releases/latest): **Windows:** `Install med-lit.bat`; **macOS:** `med-lit-macos-<version>.dmg`, then open the disk image and double-click **med-lit Installer**. Accept the normal macOS downloaded-app confirmation if shown.
-2. The installer finds or installs uv and Python, showing progress in a native window on Mac or a console window on Windows. Complete the browser form: your contact email, reviews folder (use **Choose folder…** or keep the suggested path), and optional database keys. No terminal commands are needed.
-3. Select **Save and connect**. Wait for **med-lit is ready**, which means the actual server connection passed verification. If it fails, the form offers **Retry connection**.
-4. Restart ChatGPT. Open **Work** with the reviews folder as a local project using **Choose project** or **File → Open Folder…**, and accept its normal folder trust prompt.
-5. Copy the message from the Ready page into ChatGPT, or ask: **“Start a med-lit review. Help me define the question, then wait for my approval before searching.”**
+1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) if you do not have it.
+2. Download the install script for your system (see above) and run it with the ChatGPT option:
 
-Reopen the downloaded installer to change settings or repair the connection. Blank key fields keep saved keys; **Remove saved key** removes one. Keys stay in private local files and are entered in the browser form, never in a conversation. The form expires after 15 minutes of inactivity. Cancellation before Save changes no settings; a downloaded runtime may remain.
+   ```bash
+   bash install.sh --chatgpt                                              # macOS
+   powershell -ExecutionPolicy Bypass -File .\install-windows.ps1 -ChatGPT   # Windows
+   ```
 
-A failed setup shows retry guidance. The Mac installer is a small native launcher signed with Developer ID and notarized by Apple. It includes the matching med-lit Python package, copies it into a persistent user runtime folder, and opens the same local browser form. No terminal typing, system Python, administrator access or copying into Applications is required. After setup you can eject the disk image; the registered server runs from the persistent runtime folder. Rerun a newer installer to update, preserving settings and reviews.
+3. Your browser opens the med-lit settings form. Fill in your contact email, reviews folder (use **Choose folder…** or keep the suggested path) and optional database keys.
+4. Select **Save and connect**. Wait for **med-lit is ready**, which means the actual server connection passed verification. If it fails, the form offers **Retry connection**.
+5. Restart ChatGPT. Open **Work** with the reviews folder as a local project, using **Choose project** or **File → Open Folder…**, and accept its normal folder trust prompt.
+6. Copy the message from the Ready page into ChatGPT, or ask: **“Start a med-lit review. Help me define the question, then wait for my approval before searching.”**
 
-The installer registers the same native MCP connection used by Codex. It needs neither a setup plugin nor the standalone Codex CLI. See [Installation and release](installation.md) for build instructions and [validation](validation.md).
+Run the script again to change settings, repair the connection or update med-lit.
+- Blank key fields keep saved keys; **Remove saved key** removes one.
+- Keys stay in private local files and are entered in the form, never in a conversation.
+- The form expires after 15 minutes of inactivity. Cancelling before Save changes no settings.
+
+The form registers the same native MCP connection Codex uses. It needs neither a setup plugin nor the standalone Codex CLI. See [Installation and release](installation.md).
 
 ## Claude Desktop (no command line)
 
@@ -100,6 +116,4 @@ Instead of the extension, you can add the server to `claude_desktop_config.json`
 
 ## Updating
 
-ChatGPT desktop users reopen the installer to change settings or repair a connection, and download a newer installer to update med-lit. The Mac installer carries its matching package; the Windows launcher downloads its pinned package version from PyPI. Both preserve saved settings and reviews. A changed native registration asks for explicit replacement in the browser form.
-
-`uvx` caches the installed version. To pick up a new release, run `uvx med-lit-mcp@latest --check` once, then restart the client (in Hermes, `/reload-mcp`). Bots use the same cached version from their next run. After an update, open each bot once with `uvx med-lit-mcp setup bot --edit "<name>"` (then choose done): this refreshes its scheduled job's instructions to the new version.
+Run the install script again, then restart the client (in Hermes, `/reload-mcp`; in pi, a new session or `/reload`). The script runs the newest release, so the `uvx med-lit-mcp` that clients start is that release from then on. Without the script, `uvx med-lit-mcp@latest --check` does the same. The ChatGPT form registers its own release; after an update it asks before replacing that registration. Saved settings and reviews are kept. Bots use the same cached version from their next run. After an update, open each bot once with `uvx med-lit-mcp setup bot --edit "<name>"` (then choose done): this refreshes its scheduled job's instructions to the new version.
