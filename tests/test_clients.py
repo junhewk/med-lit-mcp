@@ -84,3 +84,50 @@ class ClientTests(Case):
         self.assertEqual(entry["transport"]["command"], command[0])
         self.assertEqual(entry["startup_timeout_sec"], 180)
         self.assertEqual(entry["tool_timeout_sec"], 600)
+
+
+class PiRegistrationTests(Case):
+    def test_pi_registration_writes_only_its_entry_and_is_idempotent(self) -> None:
+        path = clients.pi_config()
+        self.assertEqual(path, (self.root / "home" / ".pi" / "agent" / "mcp.json").resolve())
+        path.parent.mkdir(parents=True)
+        original = {"autoEnableCodemode": False, "mcpServers": {"other": {"command": "other", "exposure": "codemode"}}}
+        path.write_text(json.dumps(original))
+        command = ["/usr/bin/uvx", "med-lit-mcp"]
+        self.assertIn("pi install", clients.register_pi(command))
+        saved = json.loads(path.read_text())
+        self.assertEqual(saved["autoEnableCodemode"], False)
+        self.assertEqual(saved["mcpServers"]["other"], original["mcpServers"]["other"])
+        self.assertEqual(saved["mcpServers"]["med-lit"], clients.pi_registration(command))
+        self.assertEqual(saved["mcpServers"]["med-lit"]["exposure"], "direct")
+        # The researcher's own change to the entry survives a repeated setup.
+        saved["mcpServers"]["med-lit"]["exposure"] = "codemode"
+        path.write_text(json.dumps(saved))
+        self.assertIn("already registered", clients.register_pi(command))
+        self.assertEqual(json.loads(path.read_text())["mcpServers"]["med-lit"]["exposure"], "codemode")
+
+    def test_a_different_pi_registration_needs_confirmation_and_bad_json_is_untouched(self) -> None:
+        path = clients.pi_config()
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"mcpServers": {"med-lit": {"command": "old", "args": []}}}))
+        with self.assertRaises(clients.RegistrationConflict):
+            clients.register_pi(["uvx", "med-lit-mcp"])
+        clients.register_pi(["uvx", "med-lit-mcp"], replace=True)
+        self.assertEqual(json.loads(path.read_text())["mcpServers"]["med-lit"]["command"], "uvx")
+        path.write_text("{not json")
+        with self.assertRaises(clients.ClientConfigurationError):
+            clients.register_pi(["uvx", "med-lit-mcp"])
+        self.assertEqual(path.read_text(), "{not json")
+
+    def test_pi_agent_directory_follows_its_environment_variable(self) -> None:
+        with patch.dict(os.environ, {"PI_CODING_AGENT_DIR": str(self.root / "pi-agent")}):
+            clients.register_pi(["uvx", "med-lit-mcp"])
+            self.assertTrue((self.root / "pi-agent" / "mcp.json").is_file())
+
+    def test_setup_registers_with_pi_when_found(self) -> None:
+        with patch.object(cli_setup.shutil, "which", side_effect=lambda name: {"uvx": "/usr/bin/uvx", "pi": "/usr/bin/pi"}.get(name)):
+            code = cli_setup.main(["setup", "--email", "me@example.org", "--yes", "--client", "pi"])
+        self.assertEqual(code, 0)
+        entry = json.loads(clients.pi_config().read_text())["mcpServers"]["med-lit"]
+        self.assertEqual(entry["command"], "/usr/bin/uvx")
+        self.assertNotIn("env", entry)  # keys stay in med-lit's own config folder

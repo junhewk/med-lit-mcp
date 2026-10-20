@@ -183,12 +183,12 @@ def setup(args: argparse.Namespace, console: Console) -> int:
     if args.no_register:
         print("\nSaved. Skipped client registration (--no-register).")
         return 0
-    found = {"hermes": find_hermes(), "claude-code": shutil.which("claude"), "codex": shutil.which("codex")}
+    found = {"hermes": find_hermes(), "claude-code": shutil.which("claude"), "codex": shutil.which("codex"), "pi": shutil.which("pi")}
     wanted = args.client or [name for name, path in found.items() if path]
     command = server_command(args.dev)
     print()
     if not wanted:
-        print("No Hermes, Claude Code or Codex found. Register the server yourself with:", " ".join(command))
+        print("No Hermes, Claude Code, Codex or pi found. Register the server yourself with:", " ".join(command))
     failed = False
     for name in wanted:
         path = found.get(name)
@@ -198,11 +198,12 @@ def setup(args: argparse.Namespace, console: Console) -> int:
             continue
         if not console.confirm(f"Register med-lit with {name}?"):
             continue
-        if name == "codex":
+        if name in ("codex", "pi"):
+            register_file = clients.register_codex if name == "codex" else clients.register_pi
             try:
-                message = clients.register_codex(command)
+                message = register_file(command)
             except clients.RegistrationConflict as exc:
-                message = clients.register_codex(command, replace=True) if console.confirm(str(exc)) else "kept the existing Codex registration"
+                message = register_file(command, replace=True) if console.confirm(str(exc)) else f"kept the existing {name} registration"
         else:
             register = register_hermes if name == "hermes" else register_claude_code
             message = register(path, command, console)
@@ -275,10 +276,10 @@ def main(argv: list[str]) -> int:
         return bot_main(argv[2:])
     parser = argparse.ArgumentParser(prog="med-lit-mcp")
     commands = parser.add_subparsers(dest="command", required=True)
-    setup_parser = commands.add_parser("setup", help="Set your email, folder and keys; register with Hermes, Claude Code or Codex")
+    setup_parser = commands.add_parser("setup", help="Set your email, folder and keys; register with Hermes, Claude Code, Codex or pi")
     setup_parser.add_argument("--email")
     setup_parser.add_argument("--projects-dir")
-    setup_parser.add_argument("--client", action="append", choices=("hermes", "claude-code", "codex", "chatgpt"),
+    setup_parser.add_argument("--client", action="append", choices=("hermes", "claude-code", "codex", "pi", "chatgpt"),
                               help="Register with this client (repeatable); default: every one found")
     setup_parser.add_argument("--ui", action="store_true", help="Open the ChatGPT desktop settings form (no terminal prompts)")
     setup_parser.add_argument("--launcher", help=argparse.SUPPRESS)  # Absolute uv path from the installer bootstrap.

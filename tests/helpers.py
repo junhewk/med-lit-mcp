@@ -45,7 +45,7 @@ class Case(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
-        env = {k: v for k, v in os.environ.items() if not k.startswith(("NCBI_", "MED_LIT_"))}
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("NCBI_", "MED_LIT_", "PI_CODING_AGENT_DIR"))}
         env.update(
             MED_LIT_STATE_DIR=str(self.root / "state"),
             MED_LIT_CONFIG_DIR=str(self.root / "config"),
