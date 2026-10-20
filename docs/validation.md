@@ -93,6 +93,37 @@ On a clean pi agent directory on Linux, from the published artifacts:
 **Not repeated for 0.2.0.** The desktop installers and their launchers are unchanged since 0.1.8;
 their native checks were not repeated for this release.
 
+## 0.2.1 release checks
+
+**Release CI.** [Release CI](https://github.com/junhewk/med-lit-mcp/actions/runs/39385312285) ran
+the test suite on each platform. Each platform then ran its install script from the checkout
+(`--dev`, without registering): the script started med-lit-mcp 0.2.1, saved the settings and
+completed `--check`. CI then published PyPI 0.2.1 and attached `med-lit-0.2.1.mcpb`.
+
+| Platform | Passed | Skips | Subtests |
+| --- | ---: | ---: | ---: |
+| Linux | 260 | 2 | 16 |
+| macOS | 260 | 2 | 16 |
+| Windows | 249 | 13 (bash-only tests) | 16 |
+
+**Downloaded script on Linux.** `scripts/install.sh`, downloaded from the `v0.2.1` tag, was run with
+`--client pi --yes` against the published PyPI release, using fresh pi and med-lit configuration
+folders:
+
+- it reported med-lit-mcp 0.2.1;
+- it wrote pi's `med-lit` entry (`uvx med-lit-mcp`, absolute uvx);
+- it printed the matching `pi install …@v0.2.1` hint;
+- its check passed.
+
+**Under pwsh on Linux.** `install-windows.ps1` ran with `-Dev`, without registering, through
+version, setup and check, and refused invalid option combinations with exit code 2.
+
+**Not checked by hand for 0.2.1:**
+
+- the `--chatgpt` browser flow end to end (it needs a person to save the form; its server side is
+  covered by the existing form tests);
+- the Windows script downloaded and run on native Windows against PyPI.
+
 ## Release gates
 
 - **Script runs.** Release CI runs both install scripts from the checkout, without registering, on Linux, macOS and Windows. A run that registers with real clients (Hermes, Codex, pi) and the ChatGPT browser form is checked by hand on the platforms available before a release, and recorded here.
