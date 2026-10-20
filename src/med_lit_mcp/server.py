@@ -342,15 +342,18 @@ async def fetch_articles(
 
 @mcp.tool(annotations=LOCAL_UPDATE_IDEMPOTENT)
 async def wiki_tasks(run_id: RunId) -> dict[str, Any]:
-    """Start here to build or update the wiki: the current step as self-contained tasks, each sized
-    for one fresh subagent. Rules: guide("wiki")."""
+    """Start here to build or update the wiki: the current step as self-contained tasks (each with its
+    full rules and the tools it may use), sized for one fresh subagent; a long step comes in portions.
+    Rules: guide("wiki")."""
     return await _run(wiki.work_plan, run_id)
 
 
 @mcp.tool(annotations=LOCAL_UPDATE_IDEMPOTENT, structured_output=False)
 async def next_wiki_article(
     run_id: RunId,
-    max_pages: Annotated[int | None, Field(ge=1, le=50, description="Limit pages read for the next article")] = None,
+    max_pages: Annotated[
+        int | None, Field(ge=1, le=50, description="Pages to read for the next article, at most the project's wiki.max_pages")
+    ] = None,
     uid: Annotated[str | None, Field(description="Serve only this article's pages (for a subagent that owns one article)")] = None,
 ) -> list[TextContent]:
     """Get the next unextracted page of article text (a JSON header plus the page); it repeats until
@@ -364,8 +367,9 @@ async def get_article_page(
     uid: Annotated[str, Field(description="Article uid")],
     page: Annotated[int, Field(ge=0, description="Page number, from 0")],
 ) -> list[TextContent]:
-    """Re-read one page of a fetched article, e.g. to check a quote; next_wiki_article serves the pages
-    still to extract. Reads only (may create the project database)."""
+    """Re-read one page of a fetched article within its extraction allowance (the project's
+    wiki.max_pages), e.g. to check a quote; next_wiki_article serves the pages still to extract. Reads
+    only (may create the project database)."""
     return _page(await _run(wiki.get_page, run_id, uid, page))
 
 

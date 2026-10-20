@@ -15,6 +15,7 @@
 | `MED_LIT_CONFIG_DIR` | Where `setup` keeps `config.json`, `keys.json` and `defaults.json`. Default: `$XDG_CONFIG_HOME/med-lit-mcp` or `~/.config/med-lit-mcp`. |
 | `MED_LIT_STATE_DIR` | Where the list of known projects is kept. Default: `$XDG_DATA_HOME/med-lit-mcp` or `~/.local/share/med-lit-mcp`. |
 | `MED_LIT_SCOPE` | Set to `bot` by `setup bot` for the `medlitbot` Hermes profile: that server sees only bot projects and cannot create projects or decide uncertain articles. |
+| `MED_LIT_RESPONSE_BYTES` | Optional. Most bytes in one batch-type tool result (screening, triage, wiki tasks), measured as the client receives it: JSON, UTF-8. Default 18,432, under pi's 20 KiB limit; Hermes allows 50,000 characters. A single screening record larger than this is sent with its abstract cut at a word boundary and marked. |
 | `MED_LIT_STAGES` | Optional, for advanced users. Exposes only the tools up to a stage: `search`, `screening`, `fetch` or `wiki` (default: all). For example, `fetch` hides the 11 wiki tools and the 3 bot tools. Clients that load tools on demand rarely need this; it helps with clients that load every tool up front. Project, status and guide tools are always available. |
 
 ## Review settings
@@ -30,7 +31,7 @@ Each review keeps its own settings in `med-lit.settings.json`, a visible file at
 | `search.languages`, `search.publication_types` | `[]` | Filters applied when the question has none, for example `["english"]` or `["review"]`. |
 | `fetch.limit` | `null` | Most included articles to fetch per search. Articles are fetched in search-rank order; those beyond the limit are marked `skipped`. |
 | `fetch.mode` | `"full_text"` | `"abstract_only"` skips PMC and Unpaywall. |
-| `wiki.max_pages` | 3 | Pages (about 12,000 characters each) read from each article for the wiki. |
+| `wiki.max_pages` | 3 | Pages (about 12,000 characters each) read from each article for the wiki. The reader, `get_article_page` and `record_extraction` all keep to it; a per-call `max_pages` can only ask for fewer. |
 | `wiki.min_sources` | 2 | Source articles an entity needs before it gets a synthesis page; others stay as stubs. |
 | `wiki.tasks_per_conversation` | 5 | For clients without subagents (Claude Desktop): wiki tasks done in one conversation before the agent asks you to continue in a new one. |
 

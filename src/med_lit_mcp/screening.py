@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from . import triage
+from .limits import cut_to_fit, fill
 from .matching import contains_verbatim
 from .projects import run_dir
 from .runs import summary
@@ -13,10 +14,9 @@ from .store import locked_run, now, save_run
 
 VALID_DECISIONS = ("include", "exclude", "uncertain")
 ABSTRACT_LIMIT = 6000
-# Clients cap one tool result: Hermes moves an MCP result over 50,000 characters to a file and shows the
-# model only a pointer (a 25-item batch measured 60,716). A batch therefore stops at this many characters
-# of titles and abstracts, however many items were asked for.
-BATCH_CHARS = 20_000
+# Clients cap one tool result (pi at 20 KiB, Hermes at 50,000 characters), so a batch stops when the
+# encoded response would pass limits.response_bytes(), however many items were asked for (limits.py).
+ABSTRACT_CUT_NOTE = "This record alone exceeds the size limit for one tool result; the abstract was cut at a word boundary."
 MAX_CORRECTIONS = 1
 INSTRUCTIONS = (
     "Screen each item using only its title and abstract against the criteria. A clear inclusion "
@@ -226,34 +226,36 @@ def next_batch(run_id: str, batch_size: int = 10, *, new_round: bool = False) ->
                 }
             changed = True
             left = _session_left(manifest, revision, pending) or []
-        items, size = [], 0
-        for uid in (left or [])[:batch_size]:
-            record = manifest["articles"][uid]["record"]
-            title = str(record.get("title") or "").strip()
-            abstract = str(record.get("abstract") or "").strip()
-            length = len(title) + min(len(abstract), ABSTRACT_LIMIT)
-            if items and size + length > BATCH_CHARS:
-                break
-            size += length
-            items.append(
-                {
-                    "uid": uid,
-                    "title": title,
-                    "abstract": abstract[:ABSTRACT_LIMIT],
-                    "abstract_truncated": len(abstract) > ABSTRACT_LIMIT,
-                    "journal": record.get("journal"),
-                    "year": str(record.get("publication_date") or "")[:4] or None,
-                    "publication_types": record.get("publication_types") or [],
-                }
-            )
-        if changed:
-            save_run(path, manifest)
-        return base | {
+        response = base | {
             "instructions": INSTRUCTIONS,
-            "items": items,
+            "items": [],
             "session_left": len(left or []),
             "remaining": len(pending),
         }
+
+        def build(uid: str) -> dict[str, Any]:
+            record = manifest["articles"][uid]["record"]
+            abstract = str(record.get("abstract") or "").strip()
+            return {
+                "uid": uid,
+                "title": str(record.get("title") or "").strip(),
+                "abstract": abstract[:ABSTRACT_LIMIT],
+                "abstract_truncated": len(abstract) > ABSTRACT_LIMIT,
+                "journal": record.get("journal"),
+                "year": str(record.get("publication_date") or "")[:4] or None,
+                "publication_types": record.get("publication_types") or [],
+            }
+
+        def shrink(item: dict[str, Any], limit: int) -> dict[str, Any] | None:
+            # One record alone is over the size limit: send the start of its abstract and say so.
+            # A quote from the delivered part is still verbatim.
+            flagged = item | {"abstract_truncated": True, "abstract_cut": ABSTRACT_CUT_NOTE}
+            return cut_to_fit(response, "items", flagged, "abstract", limit)
+
+        response, _ = fill(response, "items", (left or [])[:batch_size], build, shrink=shrink)
+        if changed:
+            save_run(path, manifest)
+        return response
 
 
 def record_decisions(

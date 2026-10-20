@@ -131,17 +131,50 @@ class SettingsAppliedTests(Case):
         plan = wiki.work_plan(run_id)
         self.assertIn("at most 5 tasks", plan["how"])
 
-    def test_wiki_plan_previews_page_limit_and_respects_reader_override(self) -> None:
+    def set_max_pages(self, value: int) -> None:
+        current = settings.load_settings(self.project.root)
+        settings.write_settings(self.project.root, settings.apply_changes(current, {"wiki.max_pages": value}))
+
+    def test_the_page_allowance_follows_the_setting_on_every_route(self) -> None:
         run_id = self.make_run()
-        self.add_text(run_id, "pubmed:123", "\n\n".join("word " * 2400 for _ in range(10)))
-        settings.write_settings(
-            self.project.root,
-            settings.apply_changes(settings.load_settings(self.project.root), {"wiki.max_pages": 1}),
-        )
+        digest = self.add_text(run_id, "pubmed:123", "\n\n".join("word " * 2400 for _ in range(10)))
+        self.set_max_pages(1)
         self.assertIn("1 page(s) left", wiki.work_plan(run_id)["tasks"][0])
         self.assertEqual(wiki.next_article(run_id)["header"]["page_count"], 1)
+        # A per-call override cannot raise the allowance above the project setting...
+        self.assertEqual(wiki.next_article(run_id, max_pages=5)["header"]["page_count"], 1)
+        # ...and the page beyond it can be neither read nor recorded.
+        with self.assertRaisesRegex(ValueError, "outside this article's extraction allowance.*project_settings"):
+            wiki.get_page(run_id, "pubmed:123", 1)
+        with self.assertRaisesRegex(ValueError, "outside this article's extraction allowance"):
+            wiki.record_extraction(run_id, "pubmed:123", digest, 1, [], [])
+        self.assertEqual(wiki.get_page(run_id, "pubmed:123", 0)["header"]["page"], 0)
+        # The researcher's route: raise the setting; an explicit request may then extend the article.
+        self.set_max_pages(2)
         self.assertEqual(wiki.next_article(run_id, max_pages=2)["header"]["page_count"], 2)
         self.assertIn("2 page(s) left", wiki.work_plan(run_id)["tasks"][0])
+        self.assertEqual(wiki.get_page(run_id, "pubmed:123", 1)["header"]["page"], 1)
+
+    def test_an_explicit_lower_limit_persists(self) -> None:
+        run_id = self.make_run()
+        self.add_text(run_id, "pubmed:123", "\n\n".join("word " * 2400 for _ in range(10)))
+        self.assertEqual(wiki.next_article(run_id, max_pages=1)["header"]["page_count"], 1)
+        self.assertEqual(wiki.next_article(run_id)["header"]["page_count"], 1)
+        with self.assertRaisesRegex(ValueError, "allowance"):
+            wiki.get_page(run_id, "pubmed:123", 2)
+
+    def test_pages_recorded_beyond_a_later_allowance_are_kept_and_the_article_completes(self) -> None:
+        run_id = self.make_run()
+        digest = self.add_text(run_id, "pubmed:123", "\n\n".join("word " * 2400 for _ in range(10)))
+        self.set_max_pages(4)
+        for page in range(4):
+            wiki.next_article(run_id)
+            wiki.record_extraction(run_id, "pubmed:123", digest, page, [], [])
+        self.set_max_pages(2)
+        self.assertTrue(wiki.next_article(run_id, uid="pubmed:123")["done"])
+        with wiki.database(self.project.db) as conn:
+            kept = conn.execute("SELECT COUNT(*) FROM kg_extraction_pages WHERE article_uid='pubmed:123'").fetchone()[0]
+        self.assertEqual(kept, 4)
 
 
 class SettingsToolTests(Case, unittest.IsolatedAsyncioTestCase):

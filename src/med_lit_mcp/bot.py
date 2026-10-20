@@ -434,7 +434,7 @@ def bot_next(name: str | None) -> dict[str, Any]:
         "step": "wiki",
         "stage": plan["step"],
         "task": task,
-        "tasks_in_stage": len(plan["tasks"]),
+        "tasks_in_stage": plan.get("total_tasks", len(plan["tasks"])),
         "do": (
             "Call delegate_task with the text of `task`, unchanged, as the goal. When the subagent has "
             f"finished, call bot_next(project={project.name!r})."

@@ -13,12 +13,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from .limits import fill
 from .projects import run_dir
 from .settings import MAX_SESSION
 from .store import locked_run, now, read_json, save_run
 
 SESSION_SIZE = MAX_SESSION  # articles screened per session (a bot run, or one interactive round)
-TRIAGE_CHARS = 20_000  # characters of titles per batch, under clients' tool-result limits
 SCALE = {
     3: "clearly meets the criteria",
     2: "probably meets them",
@@ -75,24 +75,23 @@ def next_batch(run_id: str) -> dict[str, Any]:
             raise ValueError("Set screening criteria first with set_screening_criteria")
         pool = _pool(manifest)
         waiting = sorted(untriaged(manifest), key=lambda uid: order_key(pool[uid], revision))
-        items, size = [], 0
-        for uid in waiting:
-            title = " ".join(str(pool[uid]["record"].get("title") or "").split()) or "(no title)"
-            if items and size + len(title) > TRIAGE_CHARS:
-                break
-            items.append({"uid": uid, "title": title})
-            size += len(title)
         question = read_json(path / "question.json").get("question") if (path / "question.json").exists() else None
-        return {
+        response = {
             "run_id": run_id,
             "revision": revision,
             "question": question,
             "criteria": manifest["selection_criteria"],
             "scale": SCALE,
             "instructions": INSTRUCTIONS,
-            "items": items,
+            "items": [],
             "remaining": len(waiting),
         }
+
+        def build(uid: str) -> dict[str, str]:
+            return {"uid": uid, "title": " ".join(str(pool[uid]["record"].get("title") or "").split()) or "(no title)"}
+
+        response, _ = fill(response, "items", waiting, build)
+        return response
 
 
 def record_scores(run_id: str, revision: int, scores: list[dict[str, Any]]) -> dict[str, Any]:

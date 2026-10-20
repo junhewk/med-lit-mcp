@@ -6,6 +6,7 @@ Hermes, Claude Code and Claude Desktop) can list them cheaply; the detail lives 
 
 from __future__ import annotations
 
+from .contracts import DUPLICATES_CONTRACT, SYNTHESIS_CONTRACT, extraction_contract
 from .ontology import ENTITY_TYPES, MENTION_ROLES
 
 _TYPES = "\n".join(
@@ -119,60 +120,15 @@ are marked skipped and listed in skipped_over_limit; report them. fetch.mode abs
 # Building the wiki
 
 Call wiki_tasks(run_id). It returns the current step (extract, duplicates, synthesize, export) as
-self-contained task texts. Article pages are large: if you can delegate, give each task verbatim to a
-fresh subagent, one after another; otherwise do the tasks yourself in order. Call wiki_tasks again
-for the next step. See guide "extraction", "duplicates" and "synthesis" for the rules each task follows.""",
-    "extraction": f"""\
-# Extracting entities and relationships from a page
-
-- Work only from the page text next_wiki_article returns; no outside knowledge.
-  Submit each page with record_extraction, passing the header's uid, content_sha256 and page.
-  get_article_page(run_id, uid, page) re-reads a page; find_entities looks up known entities.
-- Extract 5-18 substantive entities per page. Broad concepts (artificial intelligence, large
-  language models) only when the page substantively depicts them. An empty list is valid.
-- Never extract publication metadata: years, PMID/PMCID/DOI, licenses, copyright, journal or
-  publisher names, dates, or generic words such as article, paper, study, source.
-- Never extract tools used only to run the study: statistics and survey software (SPSS, Stata, R,
-  GraphPad Prism, NVivo, REDCap, Qualtrics). Extract a PLACE or ORGANIZATION only when the article
-  says something about it, not when it is merely where the study was done or who funded it.
-- name: the canonical name. Expand acronyms except well-known ones (FDA, WHO);
-  "expansion (ACRONYM)" records both. Reuse a known_entities name, or pass its id as entity_id.
-- mention: a verbatim span from this page naming the entity. description: 1-2 sentences on how
-  this page depicts it.
-- role: the PICO/PCC element the entity plays in the study this article reports; omit it for
-  background or discussion mentions.
-{_ROLES}
-- Relationships: source and target must be entities in the same call; relationship is an active
-  verb (evaluates, supports, limits, causes); evidence is a verbatim quote from this page; detail
-  says how it shows up.
-- entity_type:
-{_TYPES}""",
-    "duplicates": """\
-# Resolving possible duplicates
-
-list_duplicate_candidates shows the pending pairs with an example mention of each.
-Merge only names for the same thing at the same level of abstraction: acronym and expansion,
-spelling or plural variants. Keep generic and specific terms distinct (machine learning vs deep
-learning; decision aid vs patient decision aid). resolve_duplicates takes merge or distinct per pair;
-merge_entities can also rename or retype an entity.""",
-    "synthesis": """\
-# Writing and updating an entity page
-
-next_synthesis returns mode "new" or "update".
-
-- new: write only from the context, in a neutral encyclopedic tone, describing how the gathered
-  articles depict the entity rather than a generic definition. Sections, as '## ' headings: Overview,
-  How Gathered Articles Depict It, Recurring Themes, Tensions and Limitations, Relationships. Use the
-  PICO/PCC roles to say how studies used the entity. Send summary, synthesis, key_aspects and
-  related_entities.
-- update: the page exists (current_synthesis). The mentions are only the evidence added since it was
-  written; removed_sources were withdrawn. Do not rewrite the page: change only the sections the new
-  evidence affects, delete statements citing removed sources, and send just those sections as
-  `sections` ({heading: full new text of the section}). Everything else is kept as it is. Send
-  summary or key_aspects only if they change.
-
-Cite sources inline as [uid], only uids from the context; link other entities as [[Name]]. Pass the
-same entity_id and input_digest to record_synthesis.""",
+self-contained task texts; each carries the full rules of its kind and names the tools it may use
+(`tools`). Article pages are large: if you can delegate, give each task verbatim to a fresh subagent,
+one after another, with only those tools; otherwise do the tasks yourself in order. A long step comes
+in portions (remaining_tasks): call wiki_tasks again when the tasks are done, for the rest and then
+the next step. The rules are also in guide "extraction", "duplicates" and "synthesis".
+An article's pages are read up to the project's wiki.max_pages; a per-call max_pages cannot exceed it.""",
+    "extraction": "# Extracting entities and relationships from a page\n\n" + extraction_contract(),
+    "duplicates": "# Resolving possible duplicates\n\n" + DUPLICATES_CONTRACT,
+    "synthesis": "# Writing and updating an entity page\n\n" + SYNTHESIS_CONTRACT,
     "ontology": f"""\
 # Entity types and roles (ontology med-lit/1)
 

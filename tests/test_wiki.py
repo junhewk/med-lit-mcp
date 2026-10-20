@@ -531,3 +531,47 @@ class PageUpdateTests(Case):
         with database(path) as migrated:
             self.assertEqual(migrated.execute("SELECT mention_id FROM kg_synthesis_mentions").fetchall()[0][0], 1)
             self.assertEqual(json.loads(migrated.execute("SELECT sources_json FROM kg_syntheses").fetchone()[0]), ["pubmed:1"])
+
+
+class ContractTests(Case):
+    """One method contract reaches every client: guide, task text and page header."""
+
+    def test_the_contract_lists_every_schema_type_and_role(self) -> None:
+        from med_lit_mcp.contracts import extraction_contract
+        from med_lit_mcp.schemas import EntityType, MentionRole
+
+        contract = extraction_contract()
+        for name in [*EntityType.__args__, *MentionRole.__args__]:
+            self.assertIn(f"- {name}:", contract)
+
+    def test_guide_tasks_and_header_carry_the_same_contract(self) -> None:
+        from med_lit_mcp.contracts import EXTRACTION_REMINDER, TASK_TOOLS, extraction_contract
+        from med_lit_mcp.guides import GUIDES
+
+        run_id = self.make_run([record(1, title="Oncology SDM")])
+        self.add_text(run_id, "pubmed:1", TEXT_A)
+        self.assertIn(extraction_contract(), GUIDES["extraction"])
+        plan = wiki.work_plan(run_id)
+        self.assertEqual((plan["kind"], plan["tools"]), ("extract", list(TASK_TOOLS["extract"])))
+        self.assertIn(extraction_contract(), plan["tasks"][0])
+        self.assertIn("Use only these med-lit tools: next_wiki_article", plan["tasks"][0])
+        self.assertEqual(wiki.next_article(run_id)["header"]["instructions"], EXTRACTION_REMINDER)
+
+    def test_task_tools_never_include_settings_or_other_stages(self) -> None:
+        from med_lit_mcp.contracts import TASK_TOOLS
+
+        forbidden = {"project_settings", "fetch_articles", "record_screening_decisions", "review_article", "set_screening_criteria", "export_wiki"}
+        self.assertFalse(forbidden & {tool for tools in TASK_TOOLS.values() for tool in tools})
+        self.assertNotIn("resolve_duplicates", TASK_TOOLS["extract"])
+
+    def test_a_long_step_comes_in_portions_within_the_size_limit(self) -> None:
+        from med_lit_mcp.limits import encoded_size, response_bytes
+
+        run_id = self.make_run([record(n, title=f"Study {n}") for n in range(1, 13)])
+        for n in range(1, 13):
+            self.add_text(run_id, f"pubmed:{n}", TEXT_A)
+        plan = wiki.work_plan(run_id)
+        self.assertLessEqual(encoded_size(plan), response_bytes())
+        self.assertEqual(plan["total_tasks"], 12)
+        self.assertEqual(len(plan["tasks"]) + plan["remaining_tasks"], 12)
+        self.assertGreater(plan["remaining_tasks"], 0)

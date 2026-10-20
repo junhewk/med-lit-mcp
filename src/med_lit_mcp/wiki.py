@@ -8,6 +8,14 @@ import re
 import sqlite3
 from typing import Any
 
+from .contracts import (
+    DUPLICATES_CONTRACT,
+    EXTRACTION_REMINDER,
+    SYNTHESIS_CONTRACT,
+    TASK_TOOLS,
+    extraction_contract,
+)
+from .limits import fill
 from .matching import (
     AliasScanner,
     candidates,
@@ -172,16 +180,36 @@ def withdraw_article(conn: sqlite3.Connection, uid: str, min_sources: int) -> se
     return touched
 
 
-def _page_count(
-    conn: sqlite3.Connection, row: sqlite3.Row, max_pages: int | None, *, override: bool = False
-) -> int:
-    """Pages to read: fixed when an article is first opened (from the setting), or by an explicit call."""
+def _cap(row: sqlite3.Row, max_pages: int | None) -> int:
     total = len(_pages(row))
-    count = row["kg_page_count"]
-    if count is None or override:
-        count = min(total, max_pages) if max_pages else total
+    return min(total, max_pages) if max_pages else total
+
+
+def _allowance(row: sqlite3.Row, max_pages: int | None) -> int:
+    """Pages of this article that may be read for and recorded in the wiki: the project's
+    wiki.max_pages (or every page), or a smaller limit stored for the article by an explicit
+    request. Nothing raises it above the project setting; the researcher changes the setting itself
+    with project_settings."""
+    cap = _cap(row, max_pages)
+    stored = row["kg_page_count"]
+    return cap if stored is None else min(int(stored), cap)
+
+
+def _page_count(conn: sqlite3.Connection, row: sqlite3.Row, max_pages: int | None, requested: int | None = None) -> int:
+    """The article's allowance, stored for reporting. An explicit request sets it anywhere up to the
+    project setting (so a raised setting can extend an article already opened), never above it."""
+    count = _allowance(row, max_pages) if requested is None else min(max(1, requested), _cap(row, max_pages))
+    if row["kg_page_count"] != count:
         conn.execute("UPDATE articles SET kg_page_count=? WHERE uid=?", (count, row["uid"]))
-    return int(count)
+    return count
+
+
+def _beyond_allowance(page: int, count: int, max_pages: int | None) -> str:
+    setting = f"wiki.max_pages = {max_pages}" if max_pages else "every page"
+    return (
+        f"page {page} is outside this article's extraction allowance (pages 0-{count - 1}; the project setting is "
+        f"{setting}). The researcher can change wiki.max_pages with project_settings."
+    )
 
 
 def _recorded_pages(conn: sqlite3.Connection, uid: str, digest: str) -> set[int]:
@@ -228,13 +256,7 @@ def _page_header(
         "research_question": question_text(run_dir(run_id)),
         "known_entities": known,
         "frequent_entities": frequent,
-        "instructions": (
-            "Extract 5-18 substantive entities from this page with record_extraction. Each mention "
-            "and relationship evidence must be copied verbatim from the page. Reuse a known entity's "
-            "name or pass its id as entity_id. Never extract publication metadata, statistics software "
-            "(SPSS, Stata, R, GraphPad Prism), or places and institutions named only as where the study "
-            "was done or who funded it. An empty list is valid for a page with nothing substantive."
-        ),
+        "instructions": EXTRACTION_REMINDER,
     }
     if row["content_type"] == "abstract_only":
         header["notice"] = "Only the abstract is available for this article; never describe it as full text."
@@ -253,8 +275,8 @@ def next_article(run_id: str, max_pages: int | None = None, uid: str | None = No
     if uid is not None and uid not in run_uids:
         raise ValueError(f"{uid} is not a fetched, included article in this run")
     uids = [uid] if uid is not None else run_uids
-    explicit = max_pages is not None
-    max_pages = max_pages if explicit else load_settings(project.root).wiki.max_pages
+    requested = max_pages
+    max_pages = load_settings(project.root).wiki.max_pages
     with database(project.db) as conn:
         pending: list[tuple[sqlite3.Row, int, list[int]]] = []
         for candidate in uids:
@@ -263,7 +285,7 @@ def next_article(run_id: str, max_pages: int | None = None, uid: str | None = No
                 continue
             _reset_if_changed(conn, row)
             row = _article(conn, candidate)
-            count = _page_count(conn, row, max_pages, override=explicit and not pending)
+            count = _page_count(conn, row, max_pages, requested if not pending else None)
             todo = sorted(set(range(count)) - _recorded_pages(conn, candidate, row["content_sha256"]))
             if todo:
                 pending.append((row, count, todo))
@@ -296,9 +318,10 @@ def get_page(run_id: str, uid: str, page: int) -> dict[str, Any]:
     with database(project.db) as conn:
         row = _article(conn, uid)
         pages = _pages(row)
-        count = int(row["kg_page_count"] or len(pages))
-        if not 0 <= page < len(pages):
-            raise ValueError(f"page must be between 0 and {len(pages) - 1}")
+        max_pages = load_settings(project.root).wiki.max_pages
+        count = _allowance(row, max_pages)
+        if not 0 <= page < count:
+            raise ValueError(_beyond_allowance(page, count, max_pages))
         recorded = _recorded_pages(conn, uid, row["content_sha256"])
         header = _page_header(conn, run_id, uids, row, page, pages, count, recorded, 0)
         return {"header": header, "text": pages[page]}
@@ -427,9 +450,10 @@ def record_extraction(
             if row["content_sha256"] != content_sha256:
                 raise ValueError("Article text changed; call next_wiki_article again")
             pages = _pages(row)
-            count = int(row["kg_page_count"] or len(pages))
+            max_pages = load_settings(project.root).wiki.max_pages
+            count = _allowance(row, max_pages)
             if not 0 <= page < count:
-                raise ValueError(f"page must be between 0 and {count - 1}")
+                raise ValueError(_beyond_allowance(page, count, max_pages))
             text = pages[page]
             title = str(row["title"] or "")
             definitions = find_acronym_definitions(str(row["full_text"]))
@@ -1095,6 +1119,10 @@ def _finish_articles(run_id: str) -> None:
 SYNTHESIS_BATCH = 5
 
 
+def _scope(kind: str) -> str:
+    return "Use only these med-lit tools: " + ", ".join(TASK_TOOLS[kind]) + "; do not change project settings or other stages."
+
+
 def work_plan(run_id: str, max_syntheses: int | None = None) -> dict[str, Any]:
     """Self-contained tasks for the current wiki step, each small enough for one fresh subagent.
 
@@ -1112,12 +1140,9 @@ def work_plan(run_id: str, max_syntheses: int | None = None) -> dict[str, Any]:
             row = conn.execute("SELECT * FROM articles WHERE uid=?", (uid,)).fetchone()
             if row is None or row["kg_sha256"] == row["content_sha256"]:
                 continue
-            # Before the reader fixes the count, preview the same project limit it uses.
-            pages = row["kg_page_count"]
-            if pages is None:
-                total = len(_pages(row))
-                pages = min(total, settings.max_pages) if settings.max_pages else total
-            done = len(_recorded_pages(conn, uid, row["content_sha256"]))
+            # The same allowance the reader and record_extraction enforce.
+            pages = _allowance(row, settings.max_pages)
+            done = len(set(range(pages)) & _recorded_pages(conn, uid, row["content_sha256"]))
             articles.append((uid, row["title"] or uid, pages - done))
         pending_duplicates = conn.execute(
             "SELECT COUNT(*) FROM kg_duplicate_candidates WHERE status='pending'"
@@ -1135,7 +1160,10 @@ def work_plan(run_id: str, max_syntheses: int | None = None) -> dict[str, Any]:
                 "entities and their relationships from that page, and call record_extraction with the "
                 "header's uid, content_sha256 and page. Reuse known_entities names or ids, and give each "
                 "entity its PICO/PCC role in this article's study when it has one. Stop when "
-                "next_wiki_article reports done. " + common + " Reply format: 'uid: N entities, M relationships, K rejected'."
+                "next_wiki_article reports done. " + common + " Reply format: 'uid: N entities, M relationships, K rejected'. "
+                + _scope("extract")
+                + "\n\nExtraction contract (the same as guide('extraction')):\n"
+                + extraction_contract()
             )
             for uid, title, left in articles
         ]
@@ -1148,6 +1176,10 @@ def work_plan(run_id: str, max_syntheses: int | None = None) -> dict[str, Any]:
                 f"and decide every pair with resolve_duplicates(project={project.name!r}, ...): merge only acronym or spelling variants of "
                 "the same thing; keep generic and specific terms distinct. Repeat until none are pending. "
                 + common
+                + " "
+                + _scope("duplicates")
+                + "\n\nDuplicates contract (the same as guide('duplicates')):\n"
+                + DUPLICATES_CONTRACT
             )
         ]
         step = "duplicates"
@@ -1163,7 +1195,9 @@ def work_plan(run_id: str, max_syntheses: int | None = None) -> dict[str, Any]:
                 "sources depict the entity; for mode 'update', change only the sections the new evidence "
                 "affects and send just those as `sections`. Cite sources inline as [uid], link entities as "
                 f"[[Name]], and call record_synthesis(project={project.name!r}, ...) with the same entity_id "
-                "and input_digest. " + common
+                "and input_digest. " + common + " " + _scope("synthesize")
+                + "\n\nSynthesis contract (the same as guide('synthesis')):\n"
+                + SYNTHESIS_CONTRACT
             )
             for size in sizes
         ]
@@ -1174,13 +1208,22 @@ def work_plan(run_id: str, max_syntheses: int | None = None) -> dict[str, Any]:
             "tasks": [],
             "next": f"Call export_wiki(project={project.name!r}); the wiki is the folder {project.root}.",
         }
-    return {
+    plan = {
         "step": step,
-        "tasks": tasks,
+        "kind": step,
+        "tools": list(TASK_TOOLS[step]),
+        "tasks": [],
+        "total_tasks": len(tasks),
         "how": (
-            "Give each task, verbatim, to its own fresh subagent, one after another (not in parallel). "
+            "Give each task, verbatim, to its own fresh subagent, one after another (not in parallel), with "
+            "only the server tools listed in `tools`. "
             f"If you cannot delegate, carry out at most {settings.tasks_per_conversation} tasks yourself in "
             "order, then stop and tell the researcher to continue in a new conversation (the work is saved). "
-            "Call wiki_tasks again when they are finished to get the next step."
+            "Call wiki_tasks again when they are finished: it returns the rest of this step "
+            "(remaining_tasks), then the next step."
         ),
     }
+    # Tasks carry their whole contract, so a long step comes in portions within one tool result.
+    plan, taken = fill(plan, "tasks", tasks, lambda task: task)
+    plan["remaining_tasks"] = len(tasks) - taken
+    return plan

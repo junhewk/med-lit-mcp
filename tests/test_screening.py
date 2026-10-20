@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import os
+import unittest
+from unittest import mock
+
+from mcp.shared.memory import create_connected_server_and_client_session
+
 from helpers import RECORD, Case, record
 
 from med_lit_mcp import fetch, screening, triage
+from med_lit_mcp.limits import encoded_size, response_bytes
 from med_lit_mcp.projects import run_dir
+from med_lit_mcp.server import mcp
 from med_lit_mcp.store import RUN_FILE, read_json, save_run
 
 
@@ -111,15 +119,44 @@ class ScreeningTests(Case):
 
 
 class BatchSizeTests(Case):
-    def test_a_batch_stops_at_its_character_budget(self) -> None:
-        long = "Communication training for medical students. " * 120  # about 5,400 characters
-        run_id = self.make_run([record(n, abstract=long) for n in range(10)], include=False, run_id="b" * 32)
+    """A batch is sized by the encoded response a client receives, not by abstract characters."""
+
+    def batch(self, records: list[dict], run_id: str, batch_size: int = 10) -> dict:
+        run_id = self.make_run(records, include=False, run_id=run_id)
         screening.set_criteria(run_id, ["communication training"], [])
-        batch = screening.next_batch(run_id, batch_size=10)
-        self.assertEqual((len(batch["items"]), batch["remaining"]), (3, 10))
-        short = self.make_run([record(n) for n in range(10)], include=False, run_id="c" * 32)
-        screening.set_criteria(short, ["communication training"], [])
-        self.assertEqual(len(screening.next_batch(short, batch_size=10)["items"]), 10)
+        return screening.next_batch(run_id, batch_size=batch_size)
+
+    def test_a_batch_stops_at_its_encoded_size(self) -> None:
+        long = "Communication training for medical students. " * 120  # about 5,400 characters
+        batch = self.batch([record(n, abstract=long) for n in range(10)], "b" * 32)
+        self.assertLessEqual(encoded_size(batch), response_bytes())
+        self.assertTrue(1 <= len(batch["items"]) < 10)
+        self.assertEqual(batch["remaining"], 10)
+        self.assertNotIn("oversized", batch)
+        self.assertEqual(len(self.batch([record(n) for n in range(10)], "c" * 32)["items"]), 10)
+
+    def test_multibyte_abstracts_are_measured_in_utf8_bytes(self) -> None:
+        korean = "환자와 의사의 공동 의사결정에 관한 연구입니다. " * 60  # about 1,700 characters, 4,300 bytes
+        batch = self.batch([record(n, abstract=korean) for n in range(10)], "e" * 32)
+        self.assertLessEqual(encoded_size(batch), response_bytes())
+        self.assertLess(len(batch["items"]), 10)  # by characters alone all ten would have fitted
+        self.assertTrue(all(item["abstract"] == korean.strip() for item in batch["items"]))
+
+    def test_one_oversized_record_is_cut_and_marked(self) -> None:
+        korean = "공동 의사결정은 환자와 의사가 함께 내리는 결정이다 " * 260  # over the 6,000-character limit; ~16,000 bytes kept
+        batch = self.batch([record(1, abstract=korean, title="Shared decision making " * 120)], "f" * 32)
+        self.assertLessEqual(encoded_size(batch), response_bytes())
+        (item,) = batch["items"]
+        self.assertTrue(item["abstract_truncated"])
+        self.assertIn("cut", item["abstract_cut"])
+        self.assertTrue(korean.startswith(item["abstract"]) and len(item["abstract"]) > 1000)
+
+    def test_the_budget_follows_the_environment(self) -> None:
+        long = "Communication training for medical students. " * 120
+        with mock.patch.dict(os.environ, {"MED_LIT_RESPONSE_BYTES": "8000"}):
+            batch = self.batch([record(n, abstract=long) for n in range(10)], "0a" * 16)
+            self.assertLessEqual(encoded_size(batch), 8000)
+            self.assertEqual(len(batch["items"]), 1)
 
 
 class TriageSessionTests(Case):
@@ -165,13 +202,15 @@ class TriageSessionTests(Case):
         self.assertEqual(len(later["items"]), 5)
         self.assertIn("pubmed:24", [item["uid"] for item in later["items"]])
 
-    def test_triage_batches_stop_at_their_character_budget_and_reject_strays(self) -> None:
+    def test_triage_batches_stop_at_their_encoded_size_and_reject_strays(self) -> None:
         manifest = read_json(run_dir(self.run_id) / RUN_FILE)
         for item in manifest["articles"].values():
             item["record"]["title"] = "A long title about communication training " * 40  # about 1,700 characters
         save_run(run_dir(self.run_id), manifest)
         batch = triage.next_batch(self.run_id)
-        self.assertEqual((len(batch["items"]), batch["remaining"]), (11, 25))
+        self.assertLessEqual(encoded_size(batch), response_bytes())
+        self.assertTrue(5 <= len(batch["items"]) < 25)
+        self.assertEqual(batch["remaining"], 25)
         result = triage.record_scores(self.run_id, self.revision, [{"uid": "pubmed:999", "score": 3}])
         self.assertEqual(result["rejected"][0]["error"], "not waiting for triage")
         with self.assertRaisesRegex(ValueError, "revision"):
@@ -182,3 +221,18 @@ class TriageSessionTests(Case):
         self.assertFalse(triage.needed(read_json(run_dir(self.run_id) / RUN_FILE)))
         screening.set_criteria(self.run_id, ["medical students"], [], replace=True)
         self.assertTrue(triage.needed(read_json(run_dir(self.run_id) / RUN_FILE)))
+
+
+class BatchTransportTests(Case, unittest.IsolatedAsyncioTestCase):
+    async def test_the_measured_size_is_the_text_the_client_receives(self) -> None:
+        korean = "환자와 의사의 공동 의사결정에 관한 연구입니다. " * 60
+        long = "Communication training for medical students. " * 120
+        records = [record(n, abstract=korean if n % 2 else long) for n in range(10)]
+        run_id = self.make_run(records, include=False, run_id="ab" * 16)
+        screening.set_criteria(run_id, ["communication training"], [])
+        async with create_connected_server_and_client_session(mcp._mcp_server) as client:
+            result = await client.call_tool("next_screening_batch", {"run_id": run_id, "batch_size": 10})
+        self.assertFalse(result.isError)
+        text = "\n".join(block.text for block in result.content if block.type == "text")
+        self.assertEqual(len(text.encode("utf-8")), encoded_size(result.structuredContent))
+        self.assertLessEqual(len(text.encode("utf-8")), response_bytes())
