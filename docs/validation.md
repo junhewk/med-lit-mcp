@@ -72,6 +72,24 @@ Scopus records, then screening, fetch (one Unpaywall PDF and one PMC full text) 
 - `pi mcp list` with the generated entry connected and listed 30 direct tools, with the bot tools
   hidden.
 
+**Release CI and published package.**
+[Release CI](https://github.com/junhewk/med-lit-mcp/actions/runs/39382148536) passed, each with 34
+subtests:
+
+| Platform | Passed | Skips |
+| --- | ---: | ---: |
+| Linux | 262 | 9 |
+| macOS | 263 | 8 |
+| Windows | 261 | 10 |
+
+It then published PyPI 0.2.0 and attached `med-lit-0.2.0.mcpb`, `Install med-lit.bat` and `SHA256SUMS`.
+
+On a clean pi agent directory on Linux, from the published artifacts:
+- `uvx med-lit-mcp@0.2.0 setup --client pi` registered the server;
+- `pi install git:github.com/junhewk/med-lit-mcp@v0.2.0` installed the package;
+- `pi mcp list` connected with 30 direct tools;
+- a pi session in a study folder carried the `med_lit_research` section and declared `run_subtask`.
+
 **Not repeated for 0.2.0.** The desktop installers and their launchers are unchanged since 0.1.8;
 their native checks were not repeated for this release.
 
