@@ -52,6 +52,7 @@ class Case(unittest.TestCase):
             MED_LIT_PROJECTS_DIR=str(self.root / "projects"),
             NCBI_EMAIL="tester@example.org",
             CODEX_HOME=str(self.root / "codex"),
+            PI_CODING_AGENT_DIR=str(self.root / "pi-agent"),
             # Setup also looks for Hermes Desktop's launchers under the home folder; never the real one.
             HOME=str(self.root / "home"),
         )

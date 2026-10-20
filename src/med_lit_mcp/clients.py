@@ -9,6 +9,7 @@ from pathlib import Path
 
 import tomlkit
 
+from . import __version__
 from .store import atomic_text, file_lock
 
 SERVER_NAME = "med-lit"
@@ -114,4 +115,4 @@ def register_pi(command: list[str], *, replace: bool = False) -> str:
     )
 
 
-PI_PACKAGE_HINT = "pi install git:github.com/junhewk/med-lit-mcp"
+PI_PACKAGE_HINT = f"pi install git:github.com/junhewk/med-lit-mcp@v{__version__}"

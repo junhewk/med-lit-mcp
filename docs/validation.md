@@ -49,6 +49,32 @@ The released `med-lit-macos-0.1.8.dmg` was built on the signing Mac from release
 - Desktop launch evidence comes from the previous build of the same launcher (SHA-256 `7ab8ccc9…4b7617`, submission `4a7858db-bf58-42f8-83df-7c650b5d3485`): Chrome downloaded the exact DMG with quarantine intact. Normal Finder launch showed Apple's trusted Open prompt; isolated browser and native Ready passed. After closing and ejecting the DMG, the exact registered persistent-wheel command connected with **31 tools, exit 0**. Setup ports and the owned download server closed; existing settings remained unchanged. Its evidence directory on the Mac is `/tmp/med-lit-native-consolidated-final`.
 - A copy of the DMG, checksum and notarization report is in the Linux checkout's ignored `dist-macos/v0.1.8/` directory.
 
+## 0.2.0 release checks
+
+**Local suite.** Release commit (this one) passed the Linux suite: 263 tests, 8 skips, 34 subtests.
+The new tests cover:
+
+- the encoded size of screening, triage and wiki-task results, including a Korean multibyte case, a
+  single oversized record, the environment override, and the exact bytes received through an
+  in-memory MCP client;
+- the page allowance on all three routes, with legacy pages beyond a lowered limit;
+- one contract shared by the guide, task texts and page headers, with every schema type and role;
+- pi registration (other entries kept, the researcher's edits kept, conflict, invalid JSON, the agent
+  directory variable).
+
+**Live evaluation on Linux.** One local model (`qwen3.8-flash-next`) on 13 PubMed/PMC/OpenAlex/
+Scopus records, then screening, fetch (one Unpaywall PDF and one PMC full text) and extraction:
+
+- Hermes v0.21.5 against pi 1.3.0 with `setup --client pi` and the pi package from this source.
+- Both arms produced the same screening, researcher-decision, fetch and extraction state.
+- Hermes's subagent asked for 5 pages and was held to the 2-page allowance.
+- pi workers were declared exactly the five extraction tools plus `read`.
+- `pi mcp list` with the generated entry connected and listed 30 direct tools, with the bot tools
+  hidden.
+
+**Not repeated for 0.2.0.** The desktop installers and their launchers are unchanged since 0.1.8;
+their native checks were not repeated for this release.
+
 ## Release gates
 
 - Test the unmodified Windows batch downloaded from the public release. Existing desktop tests used isolated developer settings and local files.

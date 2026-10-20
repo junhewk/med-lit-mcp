@@ -89,7 +89,7 @@ class ClientTests(Case):
 class PiRegistrationTests(Case):
     def test_pi_registration_writes_only_its_entry_and_is_idempotent(self) -> None:
         path = clients.pi_config()
-        self.assertEqual(path, (self.root / "home" / ".pi" / "agent" / "mcp.json").resolve())
+        self.assertEqual(path, (self.root / "pi-agent" / "mcp.json").resolve())
         path.parent.mkdir(parents=True)
         original = {"autoEnableCodemode": False, "mcpServers": {"other": {"command": "other", "exposure": "codemode"}}}
         path.write_text(json.dumps(original))
@@ -120,9 +120,13 @@ class PiRegistrationTests(Case):
         self.assertEqual(path.read_text(), "{not json")
 
     def test_pi_agent_directory_follows_its_environment_variable(self) -> None:
-        with patch.dict(os.environ, {"PI_CODING_AGENT_DIR": str(self.root / "pi-agent")}):
+        with patch.dict(os.environ, {"PI_CODING_AGENT_DIR": str(self.root / "other-pi")}):
             clients.register_pi(["uvx", "med-lit-mcp"])
-            self.assertTrue((self.root / "pi-agent" / "mcp.json").is_file())
+            self.assertTrue((self.root / "other-pi" / "mcp.json").is_file())
+        with patch.dict(os.environ, {"HOME": str(self.root / "home")}):
+            os.environ.pop("PI_CODING_AGENT_DIR")
+            with patch.object(clients.Path, "home", return_value=self.root / "home"):
+                self.assertEqual(clients.pi_config(), (self.root / "home" / ".pi" / "agent" / "mcp.json").resolve())
 
     def test_setup_registers_with_pi_when_found(self) -> None:
         with patch.object(cli_setup.shutil, "which", side_effect=lambda name: {"uvx": "/usr/bin/uvx", "pi": "/usr/bin/pi"}.get(name)):

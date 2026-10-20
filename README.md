@@ -40,6 +40,20 @@ Talk to your agent. It starts each stage only when you ask and confirms the sear
 
 Each review is a self-contained project folder. Open it in Obsidian with *Open folder as vault*.
 
+## What's new in 0.2.0
+
+- **pi support.** `uvx med-lit-mcp setup --client pi` adds med-lit to pi's `mcp.json`. It writes only med-lit's own entry and leaves pi's model, sign-in and settings alone. An optional pi package (`pi install git:github.com/junhewk/med-lit-mcp@v0.2.0`) adds two things: the research policy in study folders, and fresh subagent workers that get only the tools their task names. See [med-lit in pi](https://github.com/junhewk/med-lit-mcp/blob/main/docs/pi.md).
+- **Batches that fit the client.**
+  - Screening, triage and wiki-task results are sized by the bytes the client actually receives (default 18 KiB, `MED_LIT_RESPONSE_BYTES`), so a client that cuts long tool results (pi at 20 KiB) gets every abstract whole.
+  - A single record too large on its own is sent with its abstract cut at a word boundary and marked.
+- **The page limit holds on every route.** `next_wiki_article`, `get_article_page` and `record_extraction` all keep to `wiki.max_pages`.
+  - **Changed:** a per-call `max_pages` can only ask for fewer pages. To read more of an article, raise the setting with `project_settings`.
+- **The rules travel with each task.** The entity types, roles and evidence rules, and the duplicate and synthesis rules, are defined once. They are included in every task `wiki_tasks` hands out, so a subagent follows them whether or not it reads a guide.
+  - **Changed:** a plan names the tools its tasks may use (`kind`, `tools`).
+  - **Changed:** a long step comes in portions (`total_tasks`, `remaining_tasks`); call `wiki_tasks` again for the rest.
+
+These changes came from comparing hosts on a pilot review: Hermes left subagents free to read past the page limit and to start the duplicate review, and pi with a stripped-down host received the rules more reliably. With 0.2.0 the backend enforces the limit and every task carries its rules, and the two hosts reached the same results.
+
 ## Documentation
 
 | Topic | |
