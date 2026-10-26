@@ -11,6 +11,7 @@ Each review is a **project**: one self-contained folder holding the review's wik
 ├── med-lit.settings.json                      ← this review's settings
 ├── entities/Shared decision making.md
 ├── sources/Guirgus 2026 - Assessing Artificial Intelligence in Patient Education.md
+├── reports/2026-10-26 3f9c1a2b.md             ← the report answering a search's question
 ├── updates/2026-09-30.md                      ← bot projects only: one report per run
 └── .med-lit/                                  ← hidden working data
     ├── project.json                           ← name, id, format version
@@ -23,9 +24,52 @@ Each review is a **project**: one self-contained folder holding the review's wik
 - **The folder is the unit.** Move, copy, archive or back it up as a whole. If you move it, ask the agent to `open_project` the new location.
 - **Where it lives** is up to you: the default is `~/med-lit/<name>`, or give a path when creating the project.
 
+## Research modes
+
+Ask a research question and `research_next` leads the review. It reads the project's settings and the search's stored state and returns the next step. Its `do` names the tools to call. A step marked `ask_researcher` is your decision: the agent shows you what the step lists and waits for your answer. Between steps it keeps you posted in a line or two.
+
+| Mode | What it does | The report is written from |
+|---|---|---|
+| `basic` | Search, title triage, screening of titles and abstracts | The included articles' abstracts |
+| `full` | The same, then full-text fetch and the evidence wiki | The full text: entity roles, relationships and pages the agent reads |
+| `deep` | Full mode in rounds: after each round the evidence is judged, and a revised search adds new articles until it is enough | The full text of every round's included articles |
+
+The checkpoints, in order:
+
+1. **Mode and search settings.** You choose a mode, and change any setting: years, sources, records per source, preprints, languages, publication types, how many articles to screen (`research.max_screened`), the fetch limit, and for deep mode the rounds (`research.deep_rounds`) and new articles per round (`research.round_articles`).
+2. **Search question.** You see the drafted PICO/PCC question as `validate_question` normalized it, with its sources, dates, warnings and repairs.
+3. **Criteria and their reasons.** The agent drafts inclusion and exclusion criteria from the approved question, each with the reason it follows from the question. They get codes, I1, I2 … and E1, E2 …. You approve or change them.
+4. **Screening on or stop** (basic and full). After each session of 20 you choose to screen the next 20 or stop. With `research.max_screened` set, screening goes on to that number without asking. If you stop, the report states how many articles were not screened. Deep mode screens each round's articles without asking.
+5. **Uncertain articles.** You decide each one (`review_article`), or leave the rest undecided. Undecided articles are not part of the answer.
+
+In a research mode every exclusion names the criterion it rests on: E1 when it meets exclusion criterion 1, I2 when it fails inclusion criterion 2. An exclusion without one is stored as uncertain. The report counts the reasons for exclusion.
+
+The call that ends a screening session returns the review's next step itself (`next_step`, the same as `research_next`), so an agent that asks the researcher at once, as Hermes does, asks from the server's counts.
+
+**Deep rounds.** Deep mode works like a bot's runs, one after another in one session. Round 1 is the approved search, screened, fetched and added to the wiki. Then the agent reads the included evidence (`next_report`) and records its judgment with `record_evaluation` (rules: `guide("evaluation")`):
+
+- whether the evidence is **sufficient**: each main part of the question is answered, or more searching is unlikely to change the answer;
+- the **gaps**, and which included studies are **adequate** (answer the question directly);
+- when it is not sufficient and rounds are left, a **revised search** aimed at the gaps. The server validates it, refuses one that repeats an earlier round, and searches it into the same review with the question's own dates.
+
+The new articles wait as candidates, their titles are triaged, and the best `research.round_articles` (at most 20) are kept, as a bot run keeps its cap. They are screened against the same criteria, fetched and added to the wiki, and the next round is judged. The review ends when the evidence is judged sufficient or at `research.deep_rounds`, which the report then says. Choosing deep mode with its round limit is your approval of these searches; each is named in the report's appendix.
+
+**The report.** `next_report` gives the agent the question, the facts of the search and screening, and the included articles, in portions that fit one tool result. The agent writes the answer, sections on the evidence by theme, key findings each with a verbatim quote from the study's stored text, and the limitations the evidence shows. `record_report` refuses the report, saving nothing, when it cites an article that is not included or when a quote is not in the article's text. Otherwise it saves `reports/<date> <run>.md`, written for a reader who did not see the review:
+
+- **In short**: the answer, then the agent's sections. Citations are numbered [1], [2] by first appearance.
+- **Is the evidence enough?** (deep): the last round's judgment and what is still open.
+- **How much to trust this**: the agent's limitations, then the limits from the review's record (abstracts only, studies beyond the fetch limit, unscreened or undecided articles, failed sources, the sample size of the search, the round limit, no risk-of-bias assessment).
+- **How this review was done**: a few plain paragraphs from the record: sources, dates, how many articles were found, ranked, screened and included, the rounds, and what was read in full.
+- **References**, with links and each study's uid.
+- **Appendix**: the key findings with their quotations, the criteria with their reasons, the counts of exclusion reasons, and the search terms of every round.
+
+The agent replies with the answer, the counts and the report's path. If the screening, the included articles or the mode change later, `research_next` asks for the report to be written again. Each report gets its own file, and earlier ones are kept (`reports/<date> <run>-2.md`, …), so a file in `reports/` is never overwritten. After stopping, screening goes on when you ask for the next session; after an automatic stop, when you raise `research.max_screened`.
+
+A screened set and its report are not a completed systematic review: no risk-of-bias or certainty assessment is made, and the report says so.
+
 ## A study, step by step
 
-Talk to your agent. The server's instructions tell it to start each stage only when you ask, and to confirm the search question with you first.
+You can also run each stage yourself. The server's instructions tell the agent to start each stage only when you ask, and to confirm the search question with you first.
 
 > **You:** Start a new review on how large language models are used in shared decision making in healthcare.
 >
@@ -47,7 +91,7 @@ Talk to your agent. The server's instructions tell it to start each stage only w
 >
 > **Agent:** `fetch_articles`, then `wiki_tasks`, which hands each article and each batch of entity pages to a fresh subagent, then `export_wiki`.
 
-Claude Code also exposes the guided prompts `/mcp__med-lit__plan_search`, `screen_run` and `build_wiki`.
+Claude Code also exposes the guided prompts `/mcp__med-lit__research_question` (the whole review), `plan_search`, `screen_run` and `build_wiki`.
 
 ## Search
 
@@ -93,6 +137,7 @@ Long steps are split into bounded calls. If a call reports `running` or `remaini
 
 | Stage | Tools |
 |---|---|
+| Research | `research_next` (the next step from question to report), `next_report`, `record_report`, `record_evaluation` (deep mode) |
 | Projects | `create_project`, `list_projects`, `open_project`, `project_settings` |
 | Search | `validate_question`, `start_search`, `resume_search`, `add_skipped_articles` |
 | Guidance | `guide` (rules for each stage, on demand) |

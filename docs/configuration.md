@@ -29,11 +29,15 @@ Each review keeps its own settings in `med-lit.settings.json`, a visible file at
 | `search.years` | `null` | Publication years: `"2020-"`, `"2010-2020"` or `"all"`. `null` means the last three years. Dates written into the question itself take precedence. |
 | `search.preprint_allow` | `false` | Keep preprints (medRxiv, bioRxiv, arXiv, Research Square, SSRN, …). When `false` each source's query excludes them where it can (PubMed, PMC, OpenAlex, Europe PMC); elsewhere they are recognised by venue, DOI and type, dropped, and counted in the run's `skipped_preprints`. |
 | `search.languages`, `search.publication_types` | `[]` | Filters applied when the question has none, for example `["english"]` or `["review"]`. |
-| `fetch.limit` | `null` | Most included articles to fetch per search. Articles are fetched in search-rank order; those beyond the limit are marked `skipped`. |
+| `fetch.limit` | `null` | Most included articles to fetch per search (in deep mode, across all its rounds). Articles are fetched in search-rank order; those beyond the limit are marked `skipped`. |
 | `fetch.mode` | `"full_text"` | `"abstract_only"` skips PMC and Unpaywall. |
 | `wiki.max_pages` | 3 | Pages (about 12,000 characters each) read from each article for the wiki. The reader, `get_article_page` and `record_extraction` all keep to it; a per-call `max_pages` can only ask for fewer. |
 | `wiki.min_sources` | 2 | Source articles an entity needs before it gets a synthesis page; others stay as stubs. |
 | `wiki.tasks_per_conversation` | 5 | For clients without subagents (Claude Desktop): wiki tasks done in one conversation before the agent asks you to continue in a new one. |
+| `research.mode` | `null` | `"basic"` (titles and abstracts, a report from the abstracts), `"full"` (also full text and the wiki) or `"deep"` (full mode in rounds until the evidence is enough). `research_next` asks for it first. See [research modes](workflow.md#research-modes). |
+| `research.max_screened` | `null` | Stop screening once this many articles are screened, best-triaged first, and write the report from those. It is checked between sessions of 20. `null` screens all, asking after each session (basic and full). Deep mode ignores it: each round keeps `research.round_articles` and screens them all. |
+| `research.deep_rounds` | 3 | Deep mode: rounds in all, the first search included (1–10). |
+| `research.round_articles` | 20 | Deep mode: new articles each later round keeps from its search, the best by title triage (1–20). |
 
 Bot projects have a few more settings; see [Bots](bots.md#bot-settings).
 

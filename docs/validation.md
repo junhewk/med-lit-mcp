@@ -14,6 +14,7 @@ The full approved review produced eight entity pages and six relationships from 
 
 Historical evidence records preserve the exact tested source/artifact scope:
 
+- [Research modes in Hermes and pi, basic and deep](validation/research-modes-20261026.md) (0.3.0)
 - [ChatGPT review](validation/chatgpt-workflow-20261002.md)
 - [Signed Mac installer](validation/macos-installer-20261002.md)
 - [Windows installer and Edge fix](validation/windows-installer-20261002.md)

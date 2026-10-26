@@ -88,12 +88,37 @@ class BotSettings(Section):
         return min(value, MAX_SESSION) if isinstance(value, int) and not isinstance(value, bool) else value
 
 
+class ResearchSettings(Section):
+    """How an interactive review runs from question to report (research_next follows it)."""
+
+    mode: Literal["basic", "full", "deep"] | None = Field(
+        default=None,
+        description=(
+            "basic: screen titles and abstracts, then report from the abstracts; full: also fetch full text "
+            "and build the evidence wiki, then report from the full text; deep: full mode in rounds, searching "
+            "again until the evidence is enough or research.deep_rounds is reached. None = not chosen yet"
+        ),
+    )
+    max_screened: int | None = Field(
+        default=None, ge=1, le=5000,
+        description="Stop screening once this many articles are screened (best-triaged first); None = screen all",
+    )
+    deep_rounds: int = Field(
+        default=3, ge=1, le=10, description="Deep mode: rounds in all, the first search included"
+    )
+    round_articles: int = Field(
+        default=20, ge=1, le=MAX_SESSION,
+        description="Deep mode: new articles each later round keeps from its search (the best-triaged; one session)",
+    )
+
+
 class ProjectSettings(Section):
     version: int = SETTINGS_VERSION
     mode: Literal["interactive", "bot"] = "interactive"
     search: SearchSettings = Field(default_factory=SearchSettings)
     fetch: FetchSettings = Field(default_factory=FetchSettings)
     wiki: WikiSettings = Field(default_factory=WikiSettings)
+    research: ResearchSettings | None = None
     bot: BotSettings | None = None
 
 
@@ -133,7 +158,11 @@ def save_user_defaults(mode: str, values: dict[str, Any]) -> Path:
 
 
 def _build(mode: str, overrides: dict[str, Any]) -> ProjectSettings:
-    base = ProjectSettings(mode=mode, bot=BotSettings() if mode == "bot" else None).model_dump()
+    base = ProjectSettings(
+        mode=mode,
+        research=None if mode == "bot" else ResearchSettings(),
+        bot=BotSettings() if mode == "bot" else None,
+    ).model_dump()
     if mode == "bot":
         # A bot re-searches its whole look-back window and skips what it knows, so new articles
         # are found only if the window's matches fit in the records requested per source.
@@ -196,6 +225,11 @@ def apply_changes(settings: ProjectSettings, changes: dict[str, Any]) -> Project
             raise ValueError(f"'{dotted}' cannot be changed")
         if parts[0] == "bot" and settings.mode != "bot":
             raise ValueError("bot settings exist only in bot projects")
+        if parts[0] == "research":
+            if settings.mode == "bot":
+                raise ValueError("research settings exist only in interactive projects")
+            if data.get("research") is None:  # a project created before research modes
+                data["research"] = ResearchSettings().model_dump()
         target = data
         for part in parts[:-1]:
             if not isinstance(target.get(part), dict):

@@ -28,36 +28,41 @@ The same script installs and updates. Setup asks for your email, a folder for yo
 
 ## Use
 
-Talk to your agent. It starts each stage only when you ask and confirms the search question with you first:
+Ask your agent a research question. med-lit leads it through the review one step at a time, and stops for every decision that is yours:
 
-> Start a new review on how large language models are used in shared decision making in healthcare.
+> How are large language models used in shared decision making in healthcare? Do a basic review.
 >
-> Looks good, run it.
+> *(the agent shows the mode and search settings, then the drafted search question)* Looks good, run it.
 >
-> Screen it. Include studies of LLMs supporting patient–clinician decisions; exclude purely technical benchmarks.
+> *(it reports the results and proposes inclusion and exclusion criteria, each with its reason)* Approved.
 >
-> Fetch the included articles and build the wiki.
+> *(it screens, asks about the articles it could not decide, and replies with the answer and the full report)*
 
-Each review is a self-contained project folder. Open it in Obsidian with *Open folder as vault*.
+There are three modes:
+
+- **basic** screens titles and abstracts, then writes the report from the abstracts.
+- **full** also fetches the included articles' full text and builds the evidence-linked wiki, then writes a report that can quote the full text.
+- **deep** runs full mode in rounds, like a bot's runs in one session. After each round the agent judges whether the included studies answer the question; if not, a revised search aimed at the gaps adds the best new articles, which are screened, fetched and added to the wiki, until the evidence is enough or the round limit is reached.
+
+The report is written for a reader who did not see the review: a short answer first, then the evidence by theme, how much to trust it, and how the review was done, with numbered references. Each cited study and quoted finding is checked against the stored articles, and the description of the search and screening comes from the review's own record. See [Running a review](https://github.com/junhewk/med-lit-mcp/blob/main/docs/workflow.md#research-modes).
+
+You can also run each stage yourself ("Screen it. Include … exclude …", "Fetch the included articles and build the wiki"). Each review is a self-contained project folder. Open it in Obsidian with *Open folder as vault*.
+
+## What's new in 0.3.0
+
+- **Research modes: from a question to a report.** Ask a research question and `research_next` leads the review step by step, stopping at every decision that is yours: the mode and search settings, the question, the criteria, whether to screen on, and the articles it could not decide.
+  - **basic**: titles and abstracts; **full**: also full text and the evidence wiki; **deep**: full mode in rounds. After each round the agent judges whether the evidence answers the question (`record_evaluation`) and, if not, a revised search adds the best new articles, until it is enough or `research.deep_rounds` is reached.
+  - **Inclusion and exclusion criteria come with reasons**, each with a code (I1 … E1 …), and every exclusion names the criterion it rests on, so the report counts the reasons for exclusion.
+- **A report that answers the question** (`next_report`, `record_report`), written for a reader who did not see the review: a short answer, the evidence by theme, how much to trust it, how the review was done, numbered references and an appendix with the quotations and criteria. Citations and quotations are checked against the stored articles; the description of the search and screening comes from the review's record. Each report gets its own file in `reports/`.
+- **Fits Hermes as it works.** Tool schemas are published without `$ref`, so every argument states its type: Hermes passes `$ref` to OpenAI-compatible models unresolved, and the model then sent the search question as a broken string (6 of 20 replayed calls before, 0 of 20 after). The call that ends a screening session returns the next step itself, for an agent that asks the researcher at once.
+- **Fixed:** an article stayed in `wiki_tasks` when a worker lowered its page allowance after recording its last page; deep-mode report portions now fit pi's 20 KiB tool results.
+
+Tested on Hermes and pi, interactive and one-shot, in every mode: [research modes test](https://github.com/junhewk/med-lit-mcp/blob/main/docs/validation/research-modes-20261026.md).
 
 ## What's new in 0.2.1
 
 - **Install scripts replace the desktop installers.** `scripts/install.sh` (macOS, Linux) and `scripts/install-windows.ps1` (Windows) install and update med-lit for every terminal client, and with `--chatgpt` for ChatGPT desktop. They need [uv](https://docs.astral.sh/uv/getting-started/installation/). The signed macOS `.dmg` and the Windows `Install med-lit.bat` are no longer built. The Claude Desktop `.mcpb` stays.
 - `setup --dev` stops with a clear message when uv is not on `PATH`, instead of registering a command that cannot start.
-
-## What's new in 0.2.0
-
-- **pi support.** `uvx med-lit-mcp setup --client pi` adds med-lit to pi's `mcp.json`. It writes only med-lit's own entry and leaves pi's model, sign-in and settings alone. An optional pi package (`pi install git:github.com/junhewk/med-lit-mcp@v<version>`) adds two things: the research policy in study folders, and fresh subagent workers that get only the tools their task names. See [med-lit in pi](https://github.com/junhewk/med-lit-mcp/blob/main/docs/pi.md).
-- **Batches that fit the client.**
-  - Screening, triage and wiki-task results are sized by the bytes the client actually receives (default 18 KiB, `MED_LIT_RESPONSE_BYTES`), so a client that cuts long tool results (pi at 20 KiB) gets every abstract whole.
-  - A single record too large on its own is sent with its abstract cut at a word boundary and marked.
-- **The page limit holds on every route.** `next_wiki_article`, `get_article_page` and `record_extraction` all keep to `wiki.max_pages`.
-  - **Changed:** a per-call `max_pages` can only ask for fewer pages. To read more of an article, raise the setting with `project_settings`.
-- **The rules travel with each task.** The entity types, roles and evidence rules, and the duplicate and synthesis rules, are defined once. They are included in every task `wiki_tasks` hands out, so a subagent follows them whether or not it reads a guide.
-  - **Changed:** a plan names the tools its tasks may use (`kind`, `tools`).
-  - **Changed:** a long step comes in portions (`total_tasks`, `remaining_tasks`); call `wiki_tasks` again for the rest.
-
-These changes came from comparing hosts on a pilot review: Hermes left subagents free to read past the page limit and to start the duplicate review, and pi with a stripped-down host received the rules more reliably. With 0.2.0 the backend enforces the limit and every task carries its rules, and the two hosts reached the same results.
 
 ## Documentation
 

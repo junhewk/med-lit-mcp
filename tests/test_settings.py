@@ -12,6 +12,7 @@ from test_search import FakeProcess, write_results
 from med_lit_mcp import fetch, projects, search, settings, wiki
 from med_lit_mcp.medsearch.preprints import is_preprint
 from med_lit_mcp.projects import run_dir
+from med_lit_mcp.runs import load_manifest
 from med_lit_mcp.server import mcp
 from med_lit_mcp.store import RUN_FILE, atomic_json, read_json
 
@@ -175,6 +176,18 @@ class SettingsAppliedTests(Case):
         with wiki.database(self.project.db) as conn:
             kept = conn.execute("SELECT COUNT(*) FROM kg_extraction_pages WHERE article_uid='pubmed:123'").fetchone()[0]
         self.assertEqual(kept, 4)
+
+    def test_an_article_whose_lowered_allowance_is_recorded_is_complete(self) -> None:
+        # A worker recorded page 0 of two, then asked for one page: the article must not stay pending.
+        run_id = self.make_run()
+        digest = self.add_text(run_id, "pubmed:123", "\n\n".join("word " * 2400 for _ in range(10)))
+        self.set_max_pages(2)
+        wiki.next_article(run_id, uid="pubmed:123")
+        wiki.record_extraction(run_id, "pubmed:123", digest, 0, [], [])
+        self.assertIn("1 page(s) left", wiki.work_plan(run_id)["tasks"][0])
+        self.assertTrue(wiki.next_article(run_id, max_pages=1, uid="pubmed:123")["done"])
+        self.assertNotEqual(wiki.work_plan(run_id)["step"], "extract")
+        self.assertEqual(load_manifest(run_id)["articles"]["pubmed:123"]["wiki"], "no_entities")
 
 
 class SettingsToolTests(Case, unittest.IsolatedAsyncioTestCase):

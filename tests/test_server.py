@@ -61,13 +61,16 @@ class ServerToolTests(Case, unittest.IsolatedAsyncioTestCase):
             listed = await client.list_tools()
             assert_complete_annotations(self, listed)
             tools = {tool.name: tool for tool in listed.tools}
-            self.assertEqual(len(tools), 33)
+            self.assertEqual(len(tools), 37)
             self.assertIn("semantic-scholar", json.dumps(tools["validate_question"].inputSchema))
             self.assertNotIn("components", json.dumps(tools["start_search"].inputSchema))
             # Clients that load tools on demand find tools by name: every tool is named in the
             # instructions or in a guide the instructions point to.
             findable = mcp.instructions + " ".join(GUIDES.values())
             self.assertEqual([name for name in tools if name not in findable], [])
+            # Every argument states its own type: no $ref for a client to pass to the model unresolved.
+            self.assertEqual([name for name, tool in tools.items() if "$ref" in json.dumps(tool.inputSchema)], [])
+            self.assertEqual(tools["validate_question"].inputSchema["properties"]["question"]["type"], "object")
             ontology = await client.call_tool("guide", {"topic": "ontology"})
             self.assertIn("CONDITION", ontology.content[0].text)
             self.assertFalse(tools["validate_question"].annotations.readOnlyHint)
@@ -156,7 +159,67 @@ class ServerToolTests(Case, unittest.IsolatedAsyncioTestCase):
             listed_projects = structured(await client.call_tool("list_projects", {}))
             self.assertEqual([p["project"] for p in listed_projects], ["Second review", "Test review"])
             prompts = {prompt.name for prompt in (await client.list_prompts()).prompts}
-            self.assertEqual(prompts, {"plan_search", "screen_run", "build_wiki"})
+            self.assertEqual(prompts, {"plan_search", "screen_run", "build_wiki", "research_question"})
+
+
+    async def test_basic_research_through_mcp_tools(self) -> None:
+        async with create_connected_server_and_client_session(mcp._mcp_server) as client:
+            step = structured(await client.call_tool("research_next", {}))
+            self.assertEqual((step["step"], step["ask_researcher"]), ("parameters", True))
+            structured(await client.call_tool("project_settings", {"changes": {"research.mode": "basic"}}))
+            self.assertEqual(structured(await client.call_tool("research_next", {}))["step"], "question")
+            checked = structured(await client.call_tool("validate_question", {"question": QUESTION}))
+            with patch.object(search.subprocess, "Popen", side_effect=lambda argv, **kw: FakeProcess(argv, **kw)):
+                run = structured(await client.call_tool("start_search", {"question_id": checked["question_id"], "wait_seconds": 0}))
+            run_id = run["run_id"]
+            self.assertEqual(structured(await client.call_tool("research_next", {"run_id": run_id}))["step"], "criteria")
+            refused = await client.call_tool("set_screening_criteria", {"run_id": run_id, "include": ["chatbot"], "exclude": []})
+            self.assertTrue(refused.isError)
+            self.assertIn("reasons", refused.content[0].text)
+            await client.call_tool(
+                "set_screening_criteria",
+                {"run_id": run_id, "include": ["chatbot"], "exclude": [], "reasons": {"I1": "The question is about chatbots"}},
+            )
+            batch = structured(await client.call_tool("next_screening_batch", {"run_id": run_id}))
+            uid = batch["items"][0]["uid"]
+            await client.call_tool(
+                "record_screening_decisions",
+                {"run_id": run_id, "revision": batch["revision"],
+                 "decisions": [{"uid": uid, "decision": "include", "reason": "Uses a chatbot", "evidence": "with a chatbot"}]},
+            )
+            self.assertEqual(structured(await client.call_tool("research_next", {"run_id": run_id}))["step"], "report")
+            context = structured(await client.call_tool("next_report", {"run_id": run_id}))
+            self.assertEqual(context["articles"][0]["uid"], uid)
+            saved = structured(
+                await client.call_tool(
+                    "record_report",
+                    {"run_id": run_id, "answer": f"One study used a chatbot for practice [{uid}].",
+                     "findings": [{"uid": uid, "finding": "Practice with a chatbot", "quote": "practised shared decision making with a chatbot"}]},
+                )
+            )
+            self.assertTrue(saved["saved"], saved)
+            self.assertTrue(Path(saved["path"]).is_file())
+            done = structured(await client.call_tool("research_next", {"run_id": run_id}))
+            self.assertEqual(done["step"], "done")
+            self.assertEqual(structured(await client.call_tool("get_run_status", {"run_id": run_id}))["report"]["mode"], "basic")
+            self.assertIn("research_next", structured(await client.call_tool("guide", {"topic": "research"})))
+
+
+    async def test_an_empty_question_in_record_evaluation_means_none(self) -> None:
+        # Hermes sends {} for the optional question once the evidence is judged sufficient.
+        from med_lit_mcp import settings
+
+        current = settings.load_settings(self.project.root)
+        settings.write_settings(self.project.root, settings.apply_changes(current, {"research.mode": "deep"}))
+        run_id = self.make_run()
+        async with create_connected_server_and_client_session(mcp._mcp_server) as client:
+            result = await client.call_tool(
+                "record_evaluation",
+                {"run_id": run_id, "sufficient": True, "assessment": "The included study answers the question.",
+                 "gaps": [], "adequate": ["pubmed:123"], "question": {}},
+            )
+        self.assertFalse(result.isError, result.content[0].text)
+        self.assertTrue(structured(result)["sufficient"])
 
 
 class StdioTests(unittest.IsolatedAsyncioTestCase):
@@ -170,11 +233,11 @@ class StdioTests(unittest.IsolatedAsyncioTestCase):
             )
             async with stdio_client(params) as (read, write), ClientSession(read, write) as client:
                 initialized = await client.initialize()
-                self.assertIn("search -> screening -> fetch -> wiki", initialized.instructions)
+                self.assertIn("search -> screening -> (fetch -> wiki)\n-> report", initialized.instructions)
                 self.assertEqual(initialized.serverInfo.version, __version__)
                 listed = await client.list_tools()
                 assert_complete_annotations(self, listed)
-                self.assertEqual(len(listed.tools), 33)
+                self.assertEqual(len(listed.tools), 37)
                 result = await client.call_tool("list_projects", {})
                 self.assertFalse(result.isError)
 
@@ -192,11 +255,12 @@ class StdioTests(unittest.IsolatedAsyncioTestCase):
                 assert_complete_annotations(self, listed)
                 names = {tool.name for tool in listed.tools}
                 prompts = {prompt.name for prompt in (await client.list_prompts()).prompts}
-        self.assertEqual(len(names), 19)
+        self.assertEqual(len(names), 23)
         self.assertIn("create_project", names)
         self.assertIn("fetch_articles", names)
         self.assertNotIn("next_wiki_article", names)
-        self.assertEqual(prompts, {"plan_search", "screen_run"})
+        self.assertEqual(prompts, {"plan_search", "screen_run", "research_question"})
+        self.assertIn("research_next", names)
 
     def test_stage_names_are_validated_and_include_prerequisites(self) -> None:
         from med_lit_mcp import config
@@ -214,7 +278,7 @@ class StdioTests(unittest.IsolatedAsyncioTestCase):
                 env={**os.environ, "MED_LIT_STATE_DIR": data, "MED_LIT_CONFIG_DIR": data, "NCBI_EMAIL": ""},
             )
         report = json.loads(completed.stdout)
-        self.assertEqual((report["database_schema"], report["ncbi_email"], report["tools"]), (2, False, 33))
+        self.assertEqual((report["database_schema"], report["ncbi_email"], report["tools"]), (2, False, 37))
         self.assertEqual(report["projects"], [])
         self.assertEqual(report["stages"], ["search", "screening", "fetch", "wiki"])
         self.assertIn("NCBI_EMAIL", completed.stderr)

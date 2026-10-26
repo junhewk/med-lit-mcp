@@ -833,26 +833,29 @@ def start_update(
     question: dict[str, Any],
     sources: list[str],
     *,
-    from_date: str,
+    from_date: str | None,
     per_source: int,
     cap: int | None,
     wait_seconds: float = 45,
+    kind: str = "update",
 ) -> dict[str, Any]:
-    """Search again into an existing run, from from_date on (open-ended), adding only new articles."""
+    """Search again into an existing run, adding only new articles: a bot's update from from_date on
+    (open-ended), or a deep review's next round with the question's own dates (from_date None)."""
     with locked_run(path) as manifest:
         poll(path, manifest)
         if manifest["search_status"] == "running":
             raise ValueError("A search is already running in this run")
         number = len(manifest.get("updates", [])) + 1
         windowed = normalize_question(question)
-        windowed["filters"]["from_date"] = from_date
-        windowed["filters"].pop("to_date", None)
+        if from_date is not None:
+            windowed["filters"]["from_date"] = from_date
+            windowed["filters"].pop("to_date", None)
         name = f"question-update-{number}.json"
         atomic_json(path / name, windowed)
         manifest.update(
             search_output=f"search-update-{number}", search_question=name, sources=sources,
             limit_per_source=per_source,
-            update={"number": number, "from_date": from_date, "cap": cap, "started_at": now()},
+            update={"number": number, "kind": kind, "from_date": from_date, "cap": cap, "started_at": now()},
         )
         _launch(path, manifest)
     return _wait(path, wait_seconds)

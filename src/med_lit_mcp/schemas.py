@@ -67,6 +67,16 @@ class ScreeningDecision(Strict):
     decision: Literal["include", "exclude", "uncertain"]
     reason: str = Field(min_length=1, max_length=1000)
     evidence: str = Field(default="", max_length=500, description="Verbatim quote; required for include/exclude")
+    criterion: str = Field(
+        default="", max_length=4,
+        description="Code of the criterion an exclude rests on: E1 (meets exclusion 1) or I2 (fails inclusion 2)",
+    )
+
+
+class ReportFinding(Strict):
+    uid: str = Field(description="An included article")
+    finding: str = Field(min_length=1, max_length=600, description="What the article shows on the question, in your words")
+    quote: str = Field(min_length=1, max_length=500, description="Verbatim quote from that article's stored text")
 
 
 class ExtractedEntity(Strict):

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from .contracts import DUPLICATES_CONTRACT, SYNTHESIS_CONTRACT, extraction_contract
 from .ontology import ENTITY_TYPES, MENTION_ROLES
+from .research import EVALUATION_RULES, REPORT_RULES
 
 _TYPES = "\n".join(
     f"- {name}: {definition} (Simple Graph Builder type {parent})" for name, (parent, definition) in ENTITY_TYPES.items()
@@ -18,8 +19,10 @@ GUIDES: dict[str, str] = {
     "workflow": """\
 # med-lit workflow
 
-Stages: project → search → screening → fetch → wiki. Start each stage only when the researcher asks;
-within a stage, repeat its batch tool while remaining > 0, then report and stop.
+Stages: project → search → screening → (fetch → wiki) → report. For a researcher's question, let
+research_next lead (guide "research"): it returns each step and stops at every decision that is the
+researcher's. Otherwise start each stage only when the researcher asks; within a stage, repeat its
+batch tool while remaining > 0, then report and stop.
 
 1. Project: list_projects; create_project(name, path?) for a new topic; open_project(path) for a moved folder.
    project_settings shows the review's settings (years, records per source, preprints, fetch limit,
@@ -33,10 +36,54 @@ within a stage, repeat its batch tool while remaining > 0, then report and stop.
    20 articles per session. review_article only for the researcher's own decision.
 4. Fetch (guide "fetch"): fetch_articles until remaining is 0.
 5. Wiki (guide "wiki"): call wiki_tasks and follow it; export_wiki at the end.
+6. Report (guide "report"): next_report, then record_report; reply with its message.
 
 Status at any time: get_run_status(run_id), list_runs, list_articles. On failure keep the run ID and
 rerun the same tool; never start a new search to retry a stage. Report every failed source and any
 non-zero records_filtered_by_source. A retrieved and screened set is not a completed systematic review.""",
+    "research": """\
+# A review from question to report: research_next
+
+Call research_next(project) and do what its `do` says, then call it again (pass the run_id once there
+is one). A step with ask_researcher=true is the researcher's decision: show them what the step lists
+in plain words (not raw JSON), ask, and stop until they answer. Between steps, keep them posted in a
+line or two (what was done, what comes next); do not paste tool output.
+
+Modes, chosen at the first step and saved as research.mode with project_settings:
+- basic: search, triage titles, screen titles and abstracts, then a report from the abstracts. Quick.
+- full: the same, then fetch the included articles' full text, build the evidence wiki, and a report
+  that can quote the full text. Takes longer.
+- deep: full mode in rounds, like a bot's runs in one session. After each round you judge whether the
+  included evidence answers the question (record_evaluation). If not, your revised search adds the
+  best new articles (research.round_articles), which are screened, fetched and added to the wiki, until
+  the evidence is enough or research.deep_rounds is reached. Choosing deep with its round limit is the
+  researcher's approval of those searches; each is validated and named in the report. Longest.
+
+Checkpoints, in order:
+1. parameters: the mode and the search settings (years, sources, records per source, preprints,
+   languages, publication types, research.max_screened, fetch.limit). Change only what they ask.
+2. question: the drafted question as validate_question normalized it, with sources, dates and warnings.
+3. criteria: inclusion and exclusion criteria drafted from the approved question, each with the reason
+   it follows from the question. Saved with set_screening_criteria(..., reasons={"I1": ..., "E1": ...}).
+   In deep mode later rounds keep these criteria, so they follow the research question, not the terms
+   of the first search.
+4. screening (basic and full): after each session of 20, screen on or stop (research_next
+   confirm="stop_screening"). With research.max_screened set, screening goes on to that number without
+   asking. Deep mode ignores max_screened: each round keeps research.round_articles and screens
+   them all without asking.
+5. uncertain: the researcher decides each (review_article), or leaves the rest undecided
+   (confirm="leave_uncertain"); undecided articles are not part of the answer.
+Then (full, deep) fetch and wiki, (deep) the evaluation of each round, then the report. Pass confirm only
+when the researcher said so.
+
+In a research mode every exclude names its criterion code (E1 for an exclusion criterion met, I2 for
+an inclusion criterion failed), so the report can count the reasons for exclusion.
+When the report is saved, reply with its message: the answer first, then the counts and the file.""",
+    "report": "# Writing the report\n\nnext_report gives the question, the methods facts and the included "
+    "articles, in portions: call it again with the offset it gives while remaining > 0. Then call "
+    "record_report(run_id, answer, findings, body, limitations). If it returns saved=false, fix each problem "
+    "and call it again. Reply to the researcher with its message.\n\n" + REPORT_RULES,
+    "evaluation": "# Judging a deep round: record_evaluation\n\n" + EVALUATION_RULES,
     "question": """\
 # Drafting the search question
 
@@ -104,6 +151,9 @@ non-zero records_filtered_by_source. A retrieved and screened set is not a compl
 - include and exclude need `evidence`: an exact short quote from the title or abstract (copy it,
   do not retype it). A decision whose quote cannot be found is stored as uncertain and listed as
   downgraded; you may resubmit it once with a real quote.
+- Criteria have codes, I1, I2 … and E1, E2 … in order (criterion_codes). An exclude names the one it
+  rests on as `criterion`: E1 when it meets exclusion criterion 1, I2 when it fails inclusion
+  criterion 2. In a research mode an exclude without one is downgraded.
 - Uncertain articles wait for the researcher: use review_article only with their decision and reason.
 - Changing criteria needs replace=true, starts a new revision and re-screens every article; tell
   the researcher first.""",

@@ -24,9 +24,26 @@ INSTRUCTIONS = (
     "uncertain. Never infer unavailable facts. For include/exclude, evidence must be an exact "
     "short quote from the title or abstract. For uncertain, the reason must name the criterion "
     "that cannot be judged and what the title/abstract leaves open (e.g. 'does not say whether the "
-    "virtual patient uses a large language model'), never just 'ambiguous'. Submit all items with "
-    "record_screening_decisions using this revision."
+    "virtual patient uses a large language model'), never just 'ambiguous'. For exclude, criterion "
+    "is the code of the criterion the decision rests on: an exclusion criterion it meets (E1) or an "
+    "inclusion criterion it fails (I2). Submit all items with record_screening_decisions using this revision."
 )
+
+
+def criterion_codes(criteria: dict[str, list[str]] | None) -> dict[str, str]:
+    """I1, I2 … for the inclusion criteria and E1, E2 … for the exclusion criteria, in their order."""
+    criteria = criteria or {}
+    return {f"{prefix}{number}": text for key, prefix in (("include", "I"), ("exclude", "E"))
+            for number, text in enumerate(criteria.get(key) or [], 1)}
+
+
+def research_mode(run_id: str) -> str | None:
+    """The research mode (basic, full, deep) of the run's project, None when no mode is chosen."""
+    from .projects import locate
+    from .settings import load_settings
+
+    research = load_settings(locate(run_id)[0].root).research
+    return research.mode if research else None
 
 
 def normalize_criteria(include: list[str], exclude: list[str]) -> dict[str, list[str]]:
@@ -69,13 +86,18 @@ def requeue_vague(manifest: dict[str, Any]) -> int:
 
 
 def validate_decision(
-    decision: str, reason: str, evidence: str, title: str, abstract: str
+    decision: str, reason: str, evidence: str, title: str, abstract: str,
+    *, criterion: str = "", codes: dict[str, str] | None = None, needs_criterion: bool = False,
 ) -> str | None:
     """Return why a decision cannot be accepted as stated, or None."""
     if decision not in VALID_DECISIONS:
         return "decision must be include, exclude, or uncertain"
     if not reason.strip():
         return "reason is empty"
+    if criterion and criterion not in (codes or {}):
+        return f"criterion {criterion!r} is not one of the criteria ({', '.join(codes or {}) or 'none'})"
+    if decision == "exclude" and needs_criterion and not criterion:
+        return "exclude needs the criterion it rests on: an exclusion code (E1) or a failed inclusion code (I1)"
     if decision == "uncertain" and not _specific(reason):
         return (
             "the reason must name the criterion that cannot be judged and what the title/abstract "
@@ -89,10 +111,28 @@ def validate_decision(
     return None
 
 
+def _check_reasons(criteria: dict[str, list[str]], reasons: dict[str, str] | None, required: bool) -> dict[str, str]:
+    codes = criterion_codes(criteria)
+    reasons = {code.strip().upper(): " ".join(text.split()) for code, text in (reasons or {}).items() if text.strip()}
+    unknown = sorted(set(reasons) - set(codes))
+    if unknown:
+        raise ValueError(f"reasons name unknown criteria {', '.join(unknown)}; the codes are {', '.join(codes)}")
+    missing = [code for code in codes if code not in reasons]
+    if required and missing:
+        raise ValueError(
+            "Give each criterion the reason it follows from the question (reasons={code: reason}); missing: "
+            + ", ".join(f"{code} ({codes[code]})" for code in missing)
+        )
+    return reasons
+
+
 def set_criteria(
-    run_id: str, include: list[str], exclude: list[str], *, replace: bool = False
+    run_id: str, include: list[str], exclude: list[str], *, replace: bool = False,
+    reasons: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    """Save criteria; a research project needs a reason for each one (reasons keyed I1 … E1 …)."""
     criteria = normalize_criteria(include, exclude)
+    reasons = _check_reasons(criteria, reasons, required=research_mode(run_id) is not None)
     path = run_dir(run_id)
     with locked_run(path) as manifest:
         if manifest["search_status"] != "complete":
@@ -114,12 +154,21 @@ def set_criteria(
             for item in manifest["articles"].values():
                 if "screening" in item:
                     item.setdefault("screening_history", []).append(item.pop("screening"))
+        # Reasons belong to their revision: new criteria drop the old ones; the same criteria may gain them.
+        reasons_changed = (changed or bool(reasons)) and manifest.get("selection_reasons", {}) != reasons
+        if reasons_changed:
+            manifest["selection_reasons"] = reasons
+            if manifest.get("selection_history"):
+                manifest["selection_history"][-1]["reasons"] = reasons
+        if changed or reasons_changed:
             save_run(path, manifest)
         result = summary(manifest)
         return {
             "run_id": run_id,
             "revision": manifest["selection_revision"],
             "criteria": criteria,
+            "codes": criterion_codes(criteria),
+            "reasons": manifest.get("selection_reasons") or {},
             "changed": changed,
             "rescreen_required": changed and current is not None,
             "pending": result["selection"]["pending"],
@@ -186,29 +235,58 @@ def prepare_session(path: Path, key: str) -> dict[str, Any]:
         return {"triage": needs_triage, "pending": len(pending), "left": len(left or [])}
 
 
+def _with_next_step(run_id: str, result: dict[str, Any]) -> dict[str, Any]:
+    """In a research review, a screened session ends with the review's next step itself, as research_next
+    would return it (counts, the checkpoint question, what to call for each answer). An agent that asks
+    the researcher straight away, as Hermes does, then asks from the server's facts."""
+    from .research import research_next
+
+    result["next_step"] = research_next(run_id=run_id)
+    result["next"] = (
+        "The session is screened. next_step is the review's next step (the same as research_next): follow it; "
+        "if it has ask_researcher=true, ask the researcher what it lists and stop."
+    )
+    return result
+
+
 def next_batch(run_id: str, batch_size: int = 10, *, new_round: bool = False) -> dict[str, Any]:
+    result = _next_batch(run_id, batch_size, new_round=new_round)
+    if result.get("session_complete") and research_mode(run_id):
+        result = _with_next_step(run_id, result)
+    return result
+
+
+def _next_batch(run_id: str, batch_size: int = 10, *, new_round: bool = False) -> dict[str, Any]:
     path = run_dir(run_id)
     with locked_run(path) as manifest:
         revision = manifest.get("selection_revision")
         if revision is None:
             raise ValueError("Set screening criteria first with set_screening_criteria")
         changed = requeue_vague(manifest) > 0
+        if new_round and (manifest.get("screening_stopped") or {}).get("revision") == revision:
+            manifest.pop("screening_stopped")  # the researcher asked to screen on after stopping
+            changed = True
         pending, marked = _pending(manifest, revision)
         changed |= marked
         left = _session_left(manifest, revision, pending)
-        base = {"run_id": run_id, "revision": revision, "criteria": manifest["selection_criteria"]}
+        base = {
+            "run_id": run_id, "revision": revision, "criteria": manifest["selection_criteria"],
+            "criterion_codes": criterion_codes(manifest["selection_criteria"]),
+        }
         if pending and not left:
             if left is not None and not new_round:
                 if changed:
                     save_run(path, manifest)
+                done = f"This session's {len(manifest['screening_round']['uids'])} articles are screened. "
                 return base | {
                     "items": [],
                     "remaining": len(pending),
                     "session_complete": True,
                     "message": (
-                        f"This session's {len(manifest['screening_round']['uids'])} articles are screened. Report "
-                        f"them to the researcher and stop; {len(pending)} articles wait for later sessions, which "
-                        "start with next_screening_batch(new_round=true) when the researcher asks."
+                        done + "Follow next_step."
+                        if research_mode(run_id)
+                        else done + f"Report them to the researcher and stop; {len(pending)} articles wait for later "
+                        "sessions, which start with next_screening_batch(new_round=true) when the researcher asks."
                     ),
                 }
             if not open_session(manifest, revision, pending):
@@ -261,9 +339,20 @@ def next_batch(run_id: str, batch_size: int = 10, *, new_round: bool = False) ->
 def record_decisions(
     run_id: str, revision: int, decisions: list[dict[str, str]], *, client: str | None = None
 ) -> dict[str, Any]:
+    result = _record_decisions(run_id, revision, decisions, client=client)
+    if result.pop("session_done"):
+        result = _with_next_step(run_id, result)
+    return result
+
+
+def _record_decisions(
+    run_id: str, revision: int, decisions: list[dict[str, str]], *, client: str | None = None
+) -> dict[str, Any]:
     path = run_dir(run_id)
+    needs_criterion = research_mode(run_id) is not None
     with locked_run(path) as manifest:
         current_revision = manifest.get("selection_revision")
+        codes = criterion_codes(manifest.get("selection_criteria"))
         if revision != current_revision:
             raise ValueError(
                 f"Criteria are at revision {current_revision}; call next_screening_batch again"
@@ -288,8 +377,10 @@ def record_decisions(
             decision = entry["decision"]
             reason = " ".join(str(entry.get("reason") or "").split())
             evidence = " ".join(str(entry.get("evidence") or "").split())
+            criterion = str(entry.get("criterion") or "").strip().upper()
             error = validate_decision(
-                decision, reason, evidence, str(record.get("title") or ""), str(record.get("abstract") or "")
+                decision, reason, evidence, str(record.get("title") or ""), str(record.get("abstract") or ""),
+                criterion=criterion, codes=codes, needs_criterion=needs_criterion,
             )
             screening = {
                 "decision": decision if error is None else "uncertain",
@@ -300,6 +391,8 @@ def record_decisions(
                 "client": client,
                 "reviewed_at": now(),
             }
+            if criterion and error is None:
+                screening["criterion"] = criterion
             if corrections:
                 screening["corrections"] = corrections
             if error is not None:
@@ -318,6 +411,9 @@ def record_decisions(
         return {
             "run_id": run_id,
             "revision": revision,
+            # Downgraded decisions may be resubmitted first; the next step follows once they are settled.
+            "session_done": needs_criterion and left is not None and not left and not downgraded,
+            "next": None,
             "session_left": len(left) if left is not None else None,
             "recorded": len(recorded),
             "downgraded": downgraded,
@@ -326,14 +422,16 @@ def record_decisions(
             "selection": result["selection"],
             "note": (
                 "Downgraded items are stored as uncertain; resubmit each once, fixing its error (a "
-                "verbatim quote, or a specific reason), or leave them for the researcher."
+                "verbatim quote, a specific reason, or a criterion code), or leave them for the researcher."
                 if downgraded
                 else None
             ),
         }
 
 
-def review(run_id: str, uid: str, decision: str, reason: str, *, client: str | None = None) -> dict[str, Any]:
+def review(
+    run_id: str, uid: str, decision: str, reason: str, *, criterion: str | None = None, client: str | None = None
+) -> dict[str, Any]:
     if decision not in ("include", "exclude") or not reason.strip():
         raise ValueError("Review needs include or exclude and the researcher's reason")
     path = run_dir(run_id)
@@ -344,6 +442,10 @@ def review(run_id: str, uid: str, decision: str, reason: str, *, client: str | N
         item = manifest["articles"].get(uid)
         if item is None:
             raise ValueError(f"Unknown article ID: {uid}")
+        codes = criterion_codes(manifest.get("selection_criteria"))
+        criterion = (criterion or "").strip().upper() or None
+        if criterion and criterion not in codes:
+            raise ValueError(f"criterion {criterion!r} is not one of the criteria ({', '.join(codes)})")
         if "screening" in item:
             item.setdefault("screening_history", []).append(item["screening"])
         item["screening"] = {
@@ -354,6 +456,6 @@ def review(run_id: str, uid: str, decision: str, reason: str, *, client: str | N
             "method": "manual",
             "client": client,
             "reviewed_at": now(),
-        }
+        } | ({"criterion": criterion} if criterion else {})
         save_run(path, manifest)
         return summary(manifest)

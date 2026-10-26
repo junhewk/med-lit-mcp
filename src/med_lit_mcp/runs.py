@@ -42,6 +42,7 @@ def summary(manifest: dict[str, Any]) -> dict[str, Any]:
             for status in ("include", "exclude", "uncertain")
         }
         | {"pending": len(articles) - len(screened)},
+        "screening_stopped": screening_stopped(manifest),
         "source_failures": manifest.get("source_failures", {}),
         "records_by_source": manifest.get("records_by_source", {}),
         "records_filtered_by_source": manifest.get("records_filtered_by_source", {}),
@@ -53,6 +54,13 @@ def summary(manifest: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def screening_stopped(manifest: dict[str, Any]) -> dict[str, Any] | None:
+    """The researcher's stop of screening at the current revision (the rest stay unscreened), if any."""
+    stopped = manifest.get("screening_stopped") or {}
+    revision = manifest.get("selection_revision")
+    return stopped if revision is not None and stopped.get("revision") == revision else None
+
+
 def require_selection_complete(manifest: dict[str, Any], stage: str) -> int:
     if manifest["search_status"] != "complete":
         raise ValueError(f"Search must complete before {stage}")
@@ -62,8 +70,12 @@ def require_selection_complete(manifest: dict[str, Any], stage: str) -> int:
     pending = sum(
         (item.get("screening") or {}).get("revision") != revision for item in manifest["articles"].values()
     )
-    if pending:
-        raise ValueError(f"Screening is not finished ({pending} pending); continue next_screening_batch")
+    if pending and not screening_stopped(manifest):
+        raise ValueError(
+            f"Screening is not finished ({pending} pending): continue with next_screening_batch(new_round=true), "
+            f"or, in a research review where the researcher chose to stop here, call research_next(run_id='{manifest['run_id']}', "
+            "confirm='stop_screening') first"
+        )
     return revision
 
 
@@ -162,7 +174,7 @@ def next_steps(manifest: dict[str, Any]) -> list[str]:
         return ["resume_search to retry the failed search"]
     if item["selection_revision"] is None:
         return ["set_screening_criteria once the researcher states inclusion/exclusion criteria"]
-    if selection["pending"]:
+    if selection["pending"] and not item["screening_stopped"]:
         return ["next_screening_batch / record_screening_decisions until pending is 0"]
     steps = []
     if selection["uncertain"]:
@@ -170,6 +182,8 @@ def next_steps(manifest: dict[str, Any]) -> list[str]:
     if item["fetch"]["pending"] and selection["include"] and "fetch" in enabled_stages():
         steps.append("fetch_articles for included articles")
     fetched = item["fetch"]["full_text"] + item["fetch"]["abstract_only"]
+    if not manifest.get("report"):
+        steps.append("next_report / record_report to write the report answering the question")
     if "wiki" not in enabled_stages():
         return steps or ["nothing further is required"]
     if fetched and item["wiki"]["pending"]:

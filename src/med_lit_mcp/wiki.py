@@ -263,10 +263,37 @@ def _page_header(
     return header
 
 
+def _complete_extracted(run_id: str, uids: list[str]) -> None:
+    """Mark articles whose allowance is fully recorded as extracted (the allowance was lowered after
+    their last page was recorded, so record_extraction did not see them finish)."""
+    project, path = locate(run_id)
+    with locked_run(path) as manifest, database(project.db) as conn:
+        for uid in uids:
+            row = _article(conn, uid)
+            if row["kg_sha256"] == row["content_sha256"]:
+                continue
+            if set(range(_allowance(row, load_settings(project.root).wiki.max_pages))) - _recorded_pages(conn, uid, row["content_sha256"]):
+                continue
+            conn.execute("UPDATE articles SET kg_sha256=?, kg_completed_at=? WHERE uid=?", (row["content_sha256"], now(), uid))
+            has_mentions = conn.execute("SELECT 1 FROM kg_mentions WHERE article_uid=? LIMIT 1", (uid,)).fetchone()
+            manifest["articles"][uid]["wiki"] = "kg_complete" if has_mentions else "no_entities"
+            manifest["articles"][uid].pop("wiki_completed_at", None)
+        save_run(path, manifest)
+
+
 def next_article(run_id: str, max_pages: int | None = None, uid: str | None = None) -> dict[str, Any]:
     """Return {header, text} for the next unextracted page, or {done: true}.
 
     With uid, only that article's pages are served, so one worker can own one article."""
+    result, finished = _next_article(run_id, max_pages, uid)
+    if finished:
+        _complete_extracted(run_id, finished)
+    if result.get("done") and uid is None:
+        _finish_articles(run_id)
+    return result
+
+
+def _next_article(run_id: str, max_pages: int | None, uid: str | None) -> tuple[dict[str, Any], list[str]]:
     project, _ = locate(run_id)
     manifest = load_manifest(run_id)
     run_uids = _fetched_uids(manifest)
@@ -277,6 +304,7 @@ def next_article(run_id: str, max_pages: int | None = None, uid: str | None = No
     uids = [uid] if uid is not None else run_uids
     requested = max_pages
     max_pages = load_settings(project.root).wiki.max_pages
+    finished: list[str] = []
     with database(project.db) as conn:
         pending: list[tuple[sqlite3.Row, int, list[int]]] = []
         for candidate in uids:
@@ -291,11 +319,12 @@ def next_article(run_id: str, max_pages: int | None = None, uid: str | None = No
                 pending.append((row, count, todo))
                 if len(pending) > 1:
                     break
+            elif row["kg_sha256"] != row["content_sha256"]:
+                finished.append(candidate)
         if not pending:
             if uid is not None:
-                return {"done": True, "run_id": run_id, "uid": uid, "note": "This article is fully extracted"}
-            _finish_articles(run_id)
-            return {"done": True, "run_id": run_id, "next": "wiki_tasks(run_id) for the next step"}
+                return {"done": True, "run_id": run_id, "uid": uid, "note": "This article is fully extracted"}, finished
+            return {"done": True, "run_id": run_id, "next": "wiki_tasks(run_id) for the next step"}, finished
         row, count, todo = pending[0]
         pages = _pages(row)
         recorded = _recorded_pages(conn, row["uid"], row["content_sha256"])
@@ -306,7 +335,7 @@ def next_article(run_id: str, max_pages: int | None = None, uid: str | None = No
             and r["kg_sha256"] != r["content_sha256"]
         )
         header = _page_header(conn, run_id, run_uids, row, todo[0], pages, count, recorded, remaining)
-        return {"header": header, "text": pages[todo[0]]}
+        return {"header": header, "text": pages[todo[0]]}, finished
 
 
 def get_page(run_id: str, uid: str, page: int) -> dict[str, Any]:

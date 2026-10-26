@@ -12,7 +12,7 @@ from typing import Annotated, Any, Literal, TypeVar
 import anyio
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.types import TextContent, ToolAnnotations
-from pydantic import Field
+from pydantic import BeforeValidator, Field
 
 from . import (
     __version__,
@@ -21,6 +21,7 @@ from . import (
     fetch,
     keys,
     projects,
+    research,
     runs,
     screening,
     search,
@@ -38,6 +39,7 @@ from .schemas import (
     ExtractedRelationship,
     FetchStatus,
     RelatedEntity,
+    ReportFinding,
     ResearchQuestion,
     ReviewDecision,
     ScreeningDecision,
@@ -47,12 +49,18 @@ from .schemas import (
 )
 
 INSTRUCTIONS = """\
-med-lit runs an auditable medical literature review: project -> search -> screening -> fetch -> wiki.
-Start each stage only when the researcher asks, and get their approval of the search question before
-searching. Only verbatim quotes count as evidence; uncertain screening decisions are the
-researcher's. State lives on disk: check get_run_status rather than chat history.
+med-lit runs an auditable medical literature review: project -> search -> screening -> (fetch -> wiki)
+-> report. For a researcher's question, research_next leads the whole review: call it, do what its
+`do` says, and call it again. When a step has ask_researcher=true, show the researcher what it lists,
+ask, and stop until they answer. Two modes: basic (titles and abstracts, a report from the abstracts)
+full (also full text and the evidence wiki) and deep (full mode in rounds that search again until
+the evidence is enough). Only verbatim quotes count as evidence; uncertain
+screening decisions are the researcher's. State lives on disk: check research_next or get_run_status
+rather than chat history.
 
 Tools by stage (if your client loads tools on demand, look them up by these names):
+- research: research_next (the next step of a review); next_report + record_report (the report that
+  answers the question, written after screening); record_evaluation (deep mode: is a round's evidence enough)
 - projects: list_projects, create_project, open_project, project_settings (show the review's settings
   when presenting the search question; change them only as the researcher asks)
 - search: validate_question -> start_search(question_id); resume_search; add_skipped_articles (only
@@ -65,8 +73,8 @@ Tools by stage (if your client loads tools on demand, look them up by these name
 - bot (scheduled jobs of bot projects only; follow the job's prompt): bot_start, bot_next, bot_finish.
   A bot project's question, criteria and settings change only with `uvx med-lit-mcp setup bot --edit`;
   in chat, read it and decide its uncertain articles with review_article.
-- rules: guide(topic) with workflow, question, screening, fetch, wiki, extraction, duplicates,
-  synthesis or ontology. Read guide("workflow") first, and the stage's guide before starting it.
+- rules: guide(topic) with workflow, research, question, screening, fetch, wiki, report, evaluation,
+  extraction, duplicates, synthesis or ontology. Read guide("workflow") first, and the stage's guide before starting it.
 """
 
 mcp = FastMCP("med-lit", instructions=INSTRUCTIONS)
@@ -151,8 +159,9 @@ async def project_settings(
         Field(description='Dotted keys to change, e.g. {"search.years": "2015-", "fetch.limit": 30}; omit to only show'),
     ] = None,
 ) -> dict[str, Any]:
-    """Show or change a project's settings (med-lit.settings.json): search years, records per source,
-    preprints, fetch limit and mode, pages per article, and more. Change them only as the researcher asks."""
+    """Show or change a project's settings (med-lit.settings.json): research mode (basic, full or deep) and
+    max_screened, search years, records per source, preprints, fetch limit and mode, pages per article,
+    and more. Change them only as the researcher asks."""
 
     def run() -> dict[str, Any]:
         owner = projects.get_project(project)
@@ -178,6 +187,21 @@ async def open_project(path: Annotated[str, Field(description="Folder of an exis
     """Register an existing project folder, for example after it was moved or copied from elsewhere."""
     project = await _run(projects.open_project, path)
     return project.summary()
+
+
+@mcp.tool(annotations=LOCAL_UPDATE_IDEMPOTENT)
+async def research_next(
+    project: ProjectName = None,
+    run_id: Annotated[RunId | None, Field(description="The review's run; default the project's newest search")] = None,
+    confirm: Annotated[
+        Literal["stop_screening", "leave_uncertain"] | None,
+        Field(description="Only with the researcher's say-so: stop screening here, or leave the uncertain articles undecided"),
+    ] = None,
+) -> dict[str, Any]:
+    """Start or continue a review: the next step from the question to the report, with `do` naming the
+    tools to call. ask_researcher=true means show the researcher what it lists and wait for their answer.
+    Rules: guide("research")."""
+    return await _run(research.research_next, project, run_id, confirm)
 
 
 @mcp.tool(annotations=READ)
@@ -253,12 +277,17 @@ async def set_screening_criteria(
     include: Annotated[list[str], Field(description="Inclusion criteria in the researcher's words")],
     exclude: Annotated[list[str], Field(description="Exclusion criteria in the researcher's words")],
     replace: Annotated[bool, Field(description="Required to change existing criteria; starts a new revision and re-screens everything")] = False,
+    reasons: Annotated[
+        dict[str, str] | None,
+        Field(description="Why each criterion follows from the question, keyed I1, I2 … (inclusion) and E1, E2 … (exclusion) in order; required in a research mode"),
+    ] = None,
 ) -> dict[str, Any]:
-    """Save the researcher's inclusion and exclusion criteria for screening. Rules: guide("screening")."""
+    """Save the researcher's inclusion and exclusion criteria (and the reason for each) for screening.
+    Rules: guide("screening")."""
 
     def save() -> dict[str, Any]:
         _not_bot(projects.locate(run_id)[0])
-        return screening.set_criteria(run_id, include, exclude, replace=replace)
+        return screening.set_criteria(run_id, include, exclude, replace=replace, reasons=reasons)
 
     return await _run(save)
 
@@ -313,11 +342,12 @@ async def review_article(
     decision: ReviewDecision,
     reason: Annotated[str, Field(min_length=1, max_length=1000)],
     ctx: Context,
+    criterion: Annotated[str | None, Field(max_length=4, description="For an exclude: the criterion code it rests on (E1, I2)")] = None,
 ) -> dict[str, Any]:
     """Record the researcher's own include/exclude decision and reason for one article."""
     if projects.scope() == "bot":
         raise ValueError("Uncertain articles wait for the researcher; a bot never decides them")
-    return await _run(screening.review, run_id, uid, decision, reason, client=_client(ctx))
+    return await _run(screening.review, run_id, uid, decision, reason, criterion=criterion, client=_client(ctx))
 
 
 @mcp.tool(annotations=NETWORK_UPDATE)
@@ -337,6 +367,58 @@ async def fetch_articles(
         max_items=max_items,
         retry_failed=retry_failed,
         retry_abstract_only=retry_abstract_only,
+    )
+
+
+@mcp.tool(annotations=QUERY)
+async def next_report(
+    run_id: RunId,
+    offset: Annotated[int, Field(ge=0, description="From the previous call's `next`")] = 0,
+) -> dict[str, Any]:
+    """Get what the report is written from: the question, the search and screening facts, and the
+    included articles' evidence, in portions (repeat while remaining > 0). Reads only (may create the
+    project database). Rules: guide("report")."""
+    return await _run(research.next_report, run_id, offset)
+
+
+@mcp.tool(annotations=LOCAL_UPDATE_IDEMPOTENT)
+async def record_report(
+    run_id: RunId,
+    answer: Annotated[str, Field(min_length=20, max_length=4000, description="The direct answer to the question, citing studies as [uid]")],
+    findings: Annotated[list[ReportFinding], Field(max_length=100, description="Key findings, each with a verbatim quote")],
+    body: Annotated[str, Field(max_length=30000, description="Markdown '## ' sections: evidence by theme, agreement and disagreement, gaps; cite [uid]")] = "",
+    limitations: Annotated[
+        list[Annotated[str, Field(min_length=1, max_length=400)]],
+        Field(max_length=10, description="Plain strings: limits the evidence shows, not those in next_report's limitations_added"),
+    ] = [],  # noqa: B006 - pydantic copies defaults
+) -> dict[str, Any]:
+    """Save the report answering the question: citations and quotes are checked against the stored
+    articles, and the methods and study list are added from the run's record. Reply with its message.
+    Rules: guide("report")."""
+    return await _run(
+        research.record_report, run_id, answer, body, [finding.model_dump() for finding in findings], list(limitations)
+    )
+
+
+@mcp.tool(annotations=NETWORK_UPDATE)
+async def record_evaluation(
+    run_id: RunId,
+    sufficient: Annotated[bool, Field(description="Whether the included studies answer the question")],
+    assessment: Annotated[str, Field(min_length=20, max_length=2000, description="2-4 plain sentences for the report, citing studies as [uid]")],
+    gaps: Annotated[list[Annotated[str, Field(min_length=1, max_length=300)]], Field(max_length=10, description="Parts of the question still unanswered")],
+    adequate: Annotated[list[str], Field(max_length=200, description="uids of the included studies that directly answer the question")],
+    question: Annotated[
+        ResearchQuestion | None,
+        # Hermes collapses the optional object to its object branch, so a model with no question sends {}.
+        BeforeValidator(lambda value: None if value in ({}, "", "null") else value),
+        Field(description="When not sufficient and rounds are left: a revised search aimed at the gaps (guide('question')); omit otherwise"),
+    ] = None,
+) -> dict[str, Any]:
+    """Deep mode: record whether this round's evidence is enough; if not, the revised question is searched
+    into the same review and the next round begins. Rules: guide("evaluation")."""
+    return await _run(
+        research.record_evaluation, run_id, sufficient, assessment, list(gaps), list(adequate),
+        None if question is None else _question(question),
     )
 
 
@@ -525,6 +607,7 @@ async def get_run_status(run_id: RunId) -> dict[str, Any]:
             stale = conn.execute("SELECT COUNT(*) FROM kg_syntheses WHERE stale=1").fetchone()[0]
         return project.summary() | runs.summary(manifest) | {
             "question": runs.question_text(path),
+            "report": research.report_brief(manifest),
             "pending_duplicates": duplicates,
             "stale_syntheses": stale,
             "available_next_steps": runs.next_steps(manifest),
@@ -566,6 +649,18 @@ async def bot_finish(project: Annotated[str, Field(description="The bot project 
 
 
 @mcp.prompt()
+def research_question(question: str) -> str:
+    """Answer a research question with a reviewed literature search and a report (basic, full or deep)."""
+    return (
+        f"Research question: {question}\n\nRun a med-lit review of this question. Call research_next and "
+        "follow it step by step. Where a step asks me (mode and search settings, the question, the criteria "
+        "and their reasons, whether to screen on, the uncertain articles), show me what it lists in plain "
+        "words and wait for my answer. Keep me posted in one or two lines between steps. At the end, reply "
+        "with the report's answer and where the full report is."
+    )
+
+
+@mcp.prompt()
 def plan_search(question: str) -> str:
     """Draft and validate a structured search for a research question."""
     return (
@@ -598,6 +693,8 @@ STAGE_TOOLS = {
     "screening": (
         "set_screening_criteria", "next_triage_batch", "record_triage_scores", "next_screening_batch",
         "record_screening_decisions", "review_article",
+        # The report follows screening, with or without full text; deep mode evaluates each round.
+        "next_report", "record_report", "record_evaluation",
     ),
     "fetch": ("fetch_articles",),
     "wiki": (
@@ -608,7 +705,37 @@ STAGE_TOOLS = {
         "bot_start", "bot_next", "bot_finish",
     ),
 }
-STAGE_PROMPTS = {"screening": ("screen_run",), "wiki": ("build_wiki",)}
+STAGE_PROMPTS = {"screening": ("screen_run", "research_question"), "wiki": ("build_wiki",)}
+
+
+def _inline_refs(node: Any, defs: dict[str, Any], seen: tuple[str, ...] = ()) -> Any:
+    """Replace each same-document $ref with the schema it names, keeping the node's own keys."""
+    if isinstance(node, list):
+        return [_inline_refs(item, defs, seen) for item in node]
+    if not isinstance(node, dict):
+        return node
+    ref = node.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#/$defs/"):
+        name = ref.removeprefix("#/$defs/")
+        if name in seen or name not in defs:
+            raise ValueError(f"cannot inline {ref}")
+        resolved = _inline_refs(defs[name], defs, (*seen, name))
+        return resolved | {k: _inline_refs(v, defs, seen) for k, v in node.items() if k != "$ref"}
+    return {k: _inline_refs(v, defs, seen) for k, v in node.items() if k != "$defs"}
+
+
+def inline_tool_schemas() -> None:
+    """Publish argument schemas without $ref, so every argument states its own type.
+
+    Some clients pass $ref/$defs to the model unchanged (Hermes with an OpenAI-compatible endpoint), and a
+    model that does not resolve them sees `"question": {"$ref": ...}` with no type and may send the object
+    as a string. Validation is unaffected: it uses the Python models, not this schema."""
+    for tool in mcp._tool_manager._tools.values():
+        if "$defs" in tool.parameters:
+            tool.parameters = _inline_refs(tool.parameters, tool.parameters["$defs"])
+
+
+inline_tool_schemas()
 
 
 def apply_stages() -> tuple[str, ...]:
