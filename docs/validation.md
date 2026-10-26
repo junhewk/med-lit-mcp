@@ -94,6 +94,46 @@ On a clean pi agent directory on Linux, from the published artifacts:
 **Not repeated for 0.2.0.** The desktop installers and their launchers are unchanged since 0.1.8;
 their native checks were not repeated for this release.
 
+## 0.3.0 release checks
+
+**Release CI.** [Release CI](https://github.com/junhewk/med-lit-mcp/actions/runs/40321722494) ran
+the test suite on each platform. Each platform then ran its install script from the checkout
+(`--dev`, without registering): the script started med-lit-mcp 0.3.0, saved the settings and
+completed `--check`. CI then published PyPI 0.3.0 and attached `med-lit-0.3.0.mcpb`.
+
+| Platform | Passed | Skips | Subtests |
+| --- | ---: | ---: | ---: |
+| Linux | 285 | 2 | 16 |
+| macOS | 285 | 2 | 16 |
+| Windows | 274 | 13 (bash-only tests) | 16 |
+
+**Published package.** `uvx med-lit-mcp@0.3.0` reported 0.3.0 and listed 37 tools.
+
+**Downloaded script on Linux.** `scripts/install.sh`, downloaded from the `v0.3.0` tag (identical to
+the tag's source), was run with `--client pi --yes` against the published PyPI release, using fresh pi and
+med-lit configuration folders and pi 1.3.0:
+
+- it reported med-lit-mcp 0.3.0;
+- it wrote pi's `med-lit` entry (`uvx med-lit-mcp`, absolute uvx, bot tools hidden), and `pi mcp list`
+  showed it connected with 37 tools, `research_next` among them;
+- it printed the matching `pi install …@v0.3.0` hint, and a second run reported it already registered;
+- its check passed.
+
+`pi install git:github.com/junhewk/med-lit-mcp@v0.3.0` installed the package from the public tag; its
+research policy names `research_next`.
+
+**Under pwsh on Linux.** `install-windows.ps1`, downloaded from the `v0.3.0` tag, ran with `-Dev`, without
+registering, through version, setup and check (0.3.0, 37 tools), and refused `-ChatGPT -Yes` with exit
+code 2.
+
+**Not checked by hand for 0.3.0:**
+
+- the `--chatgpt` browser flow end to end (it needs a person to save the form; its server side is
+  covered by the existing form tests);
+- the Windows script downloaded and run on native Windows against PyPI;
+- the research modes on Claude Code, Claude Desktop, Codex and ChatGPT (tested on Hermes and pi:
+  [research modes test](validation/research-modes-20261026.md)).
+
 ## 0.2.1 release checks
 
 **Release CI.** [Release CI](https://github.com/junhewk/med-lit-mcp/actions/runs/39385312285) ran
