@@ -179,6 +179,31 @@ setup and configuration checks against 0.4.0, using isolated settings and `--no-
 These checks do not establish native Windows downloaded-script behavior; release CI runs that
 platform's checkout script separately.
 
+**Release CI.** Release commit `aa03ad3`, tagged `v0.4.0`, passed
+[Release CI](https://github.com/junhewk/med-lit-mcp/actions/runs/42550602598). Each platform also
+ran its checkout install script, then the workflow built the Python packages, published
+[PyPI 0.4.0](https://pypi.org/project/med-lit-mcp/0.4.0/) and attached `med-lit-0.4.0.mcpb` to the
+[GitHub release](https://github.com/junhewk/med-lit-mcp/releases/tag/v0.4.0).
+
+| Platform | Passed | Skips | Subtests |
+| --- | ---: | ---: | ---: |
+| Linux | 311 | 2 | 26 |
+| macOS | 311 | 2 | 26 |
+| Windows | 287 | 26 | 26 |
+
+**Published artifacts and downloaded scripts.** Both scripts were downloaded from the public
+`v0.4.0` tag and matched the tagged source byte for byte. On Linux, the downloaded bash script
+registered the published package with the installed Claude Code and Codex CLIs before collecting
+any credentials. Both native launch commands reported 0.4.0, initialized with 42 tools and returned
+unconfigured status without writing an email or key. Their isolated store paths were retained.
+The downloaded PowerShell script, run under `pwsh` on Linux, passed the equivalent Codex bootstrap
+and rejected `-ChatGPT -Yes` with exit code 2. Existing user settings were unchanged.
+
+The public wheel matched its SHA-256 in PyPI metadata and contains the browser form. The downloaded
+Claude Desktop extension matched GitHub's asset digest, declares 42 tools and pins 0.4.0. Its
+SHA-256 is `4bf3a9193f397d08df6242373b2628fe3ca2eb3aab331745fdb6205e32f9a053`.
+Public script runs were on Linux; native Windows coverage here is the CI checkout-script run.
+
 The live client checks below cover setup and bot management before release. Research-mode
 evaluations and earlier desktop checks retain their original version and platform scope above.
 

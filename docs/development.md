@@ -31,8 +31,9 @@ The 0.4.0 source suite passed **312 tests, 1 skipped, 26 subtests** on Linux. Pr
 conversational settings were tested with installed Hermes, Claude Code and Codex; the latter two
 also passed the full bot-management lifecycle using Hermes's scheduler on jkworkstation. These
 tests used separate native client homes and med-lit stores, and verified that synthetic credentials
-stayed out of transcripts and saved client state. CI tests all three operating systems before
-publishing to PyPI. See [Validation](validation.md) for the exact scope and earlier platform checks.
+stayed out of transcripts and saved client state. The 0.4.0 release CI passed on Linux, macOS and
+Windows, then published PyPI and the Claude Desktop extension. Public-download checks passed too.
+See [Validation](validation.md#040-release-checks) for the exact scope and earlier platform checks.
 
 When testing setup or bot registration, use temporary `MED_LIT_CONFIG_DIR`, `MED_LIT_STATE_DIR`,
 `MED_LIT_PROJECTS_DIR`, and the client's own configuration directory (`HERMES_HOME`,
