@@ -13,6 +13,18 @@ from . import __version__
 from .store import atomic_text, file_lock
 
 SERVER_NAME = "med-lit"
+CLIENT_NAMES = {"hermes": "Hermes", "claude-code": "Claude Code", "codex": "Codex", "pi": "pi",
+                "chatgpt": "ChatGPT", "agent": "your agent"}
+
+
+def server_environment(command: list[str], client: str) -> dict[str, str]:
+    """Forward launch metadata and local routing, never contact details or database keys."""
+    env = {"MED_LIT_CLIENT": client, "MED_LIT_LAUNCH_COMMAND": json.dumps(command)}
+    for name in ("HERMES_HOME", "MED_LIT_CONFIG_DIR", "MED_LIT_STATE_DIR", "MED_LIT_PROJECTS_DIR",
+                 "BROWSER", "DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"):
+        if os.environ.get(name):
+            env[name] = os.environ[name]
+    return env
 
 
 class RegistrationConflict(ValueError):
@@ -27,11 +39,12 @@ def codex_config() -> Path:
     return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").expanduser().resolve() / "config.toml"
 
 
-def registration(command: list[str]) -> dict:
-    return {"command": command[0], "args": command[1:], "startup_timeout_sec": 180, "tool_timeout_sec": 600}
+def registration(command: list[str], *, client: str = "codex") -> dict:
+    return {"command": command[0], "args": command[1:], "startup_timeout_sec": 180, "tool_timeout_sec": 600,
+            "env": server_environment(command, client)}
 
 
-def register_codex(command: list[str], *, replace: bool = False) -> str:
+def register_codex(command: list[str], *, replace: bool = False, client: str = "codex") -> str:
     """Write one table, retaining unrelated TOML and existing per-tool policy."""
     path = codex_config()
     with file_lock(path.with_suffix(".med-lit.lock")):
@@ -43,13 +56,15 @@ def register_codex(command: list[str], *, replace: bool = False) -> str:
         servers = document.setdefault("mcp_servers", tomlkit.table())
         if not isinstance(servers, Mapping):
             raise ClientConfigurationError("The client MCP configuration is invalid; the file was not changed.")
-        desired = registration(command)
+        desired = registration(command, client=client)
         existing = servers.get(SERVER_NAME)
         if existing is not None:
             if not isinstance(existing, Mapping):
                 raise ClientConfigurationError("The existing med-lit configuration is invalid; the file was not changed.")
             same = existing.get("command") == command[0] and list(existing.get("args", [])) == command[1:]
-            conflicting = not same or existing.get("enabled") is False or any(k in existing for k in ("url", "env", "env_vars", "cwd"))
+            conflicting = (not same or existing.get("enabled") is False
+                           or any(k in existing for k in ("url", "env_vars", "cwd"))
+                           or ("env" in existing and existing["env"] != desired["env"]))
             if conflicting and not replace:
                 raise RegistrationConflict("med-lit already has a different registration. Replace it?")
             if conflicting:

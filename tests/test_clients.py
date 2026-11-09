@@ -53,6 +53,32 @@ class ClientTests(Case):
         self.assertEqual(entry["enabled_tools"], ["guide"])
         self.assertEqual(entry["startup_timeout_sec"], 180)
         self.assertEqual(entry["tool_timeout_sec"], 600)
+        self.assertEqual(entry["env"]["MED_LIT_CLIENT"], "codex")
+
+    def test_registration_forwards_routing_and_launcher_without_credentials(self) -> None:
+        command = ["/usr/bin/uvx", "med-lit-mcp"]
+        with patch.dict(os.environ, {"SCOPUS_API_KEY": "private-key", "BROWSER": "/tmp/private-browser %s"}):
+            env = clients.registration(command)["env"]
+        self.assertEqual(env["MED_LIT_LAUNCH_COMMAND"], json.dumps(command))
+        self.assertEqual(env["MED_LIT_CLIENT"], "codex")
+        self.assertEqual(env["BROWSER"], "/tmp/private-browser %s")
+        for name in ("MED_LIT_CONFIG_DIR", "MED_LIT_STATE_DIR", "MED_LIT_PROJECTS_DIR"):
+            self.assertEqual(env[name], os.environ[name])
+        self.assertNotIn("NCBI_EMAIL", env)
+        self.assertNotIn("SCOPUS_API_KEY", env)
+
+    def test_registration_metadata_is_idempotent_and_custom_environment_needs_confirmation(self) -> None:
+        command = ["uvx", "med-lit-mcp"]
+        clients.register_codex(command)
+        self.assertIn("already registered", clients.register_codex(command))
+        path = clients.codex_config()
+        document = tomlkit.parse(path.read_text())
+        document["mcp_servers"]["med-lit"]["env"]["CUSTOM_VALUE"] = "keep-until-confirmed"
+        path.write_text(tomlkit.dumps(document))
+        before = path.read_text()
+        with self.assertRaises(clients.RegistrationConflict):
+            clients.register_codex(command)
+        self.assertEqual(path.read_text(), before)
 
     def test_codex_cli_setup_keeps_keys_out_of_native_configuration(self) -> None:
         launcher = str(self.root / "uvx")

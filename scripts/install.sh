@@ -15,6 +15,7 @@
 #   --projects-dir DIR  Folder for your reviews (default ~/med-lit).
 #   --yes               Accept defaults without asking (needs --email; keys are skipped).
 #   --no-register       Only save the settings and keys.
+#   --terminal          Enter settings here (Hermes, Claude Code and Codex can configure from chat).
 #   --dev CHECKOUT      Run the server from a source checkout instead of PyPI (development).
 #   -h, --help          Show this help.
 #
@@ -28,9 +29,10 @@ email=""
 projects_dir=""
 assume_yes=0
 no_register=0
+terminal=0
 dev=""
 
-usage() { sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -40,14 +42,15 @@ while [ $# -gt 0 ]; do
         --projects-dir) projects_dir="${2:?--projects-dir needs a value}"; shift 2 ;;
         --yes) assume_yes=1; shift ;;
         --no-register) no_register=1; shift ;;
+        --terminal) terminal=1; shift ;;
         --dev) dev="${2:?--dev needs a checkout folder}"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown option: $1 (see --help)" >&2; exit 2 ;;
     esac
 done
 
-if [ "$chatgpt" -eq 1 ] && { [ ${#clients[@]} -gt 0 ] || [ "$assume_yes" -eq 1 ] || [ "$no_register" -eq 1 ]; }; then
-    echo "--chatgpt uses the browser form; it cannot be combined with --client, --yes or --no-register." >&2
+if [ "$chatgpt" -eq 1 ] && { [ ${#clients[@]} -gt 0 ] || [ "$assume_yes" -eq 1 ] || [ "$no_register" -eq 1 ] || [ "$terminal" -eq 1 ]; }; then
+    echo "--chatgpt uses the browser form; it cannot be combined with --client, --yes, --no-register or --terminal." >&2
     exit 2
 fi
 
@@ -83,6 +86,7 @@ else
     if [ -n "$projects_dir" ]; then setup_args+=(--projects-dir "$projects_dir"); fi
     if [ "$assume_yes" -eq 1 ]; then setup_args+=(--yes); fi
     if [ "$no_register" -eq 1 ]; then setup_args+=(--no-register); fi
+    if [ "$terminal" -eq 1 ]; then setup_args+=(--terminal); fi
 fi
 if [ -n "$dev" ]; then setup_args+=(--dev "$dev"); fi
 echo "==> Setting up med-lit"
@@ -98,5 +102,5 @@ echo "==> Checking the configuration"
 "${runner[@]}" --check
 echo ""
 echo "Done. Restart your MCP client (in Hermes /reload-mcp, in pi a new session or /reload), then ask:"
-echo "  \"Start a new review on ...\""
+echo "  \"Set up med-lit, then help me start a new review on ...\""
 echo "To update later, run this script again."

@@ -165,6 +165,98 @@ version, setup and check, and refused invalid option combinations with exit code
   covered by the existing form tests);
 - the Windows script downloaded and run on native Windows against PyPI.
 
+## 0.4.0 release checks
+
+**Source and built packages.** The versioned source passed **312 tests, 1 skipped, 26 subtests**
+on Linux, with source lint and whitespace checks passing. Wheel and sdist metadata passed
+`twine check`. An isolated installation of the built wheel reported 0.4.0, initialized the MCP
+connection with all **42 tools**, and served the private setup guide and configuration status.
+The wheel includes the browser form. The Claude Desktop bundle passed manifest validation,
+declares 42 tools, and pins `med-lit-mcp==0.4.0`.
+
+**Install scripts from the checkout.** Both bash and PowerShell (`pwsh` on Linux) ran version,
+setup and configuration checks against 0.4.0, using isolated settings and `--no-register`.
+These checks do not establish native Windows downloaded-script behavior; release CI runs that
+platform's checkout script separately.
+
+The live client checks below cover setup and bot management before release. Research-mode
+evaluations and earlier desktop checks retain their original version and platform scope above.
+
+## Private setup and conversational Hermes bots — 2026-11-09 (0.4.0)
+
+Tested the development checkout over SSH on jkworkstation with its installed Hermes Agent
+v0.21.5+7498.gebadb54, using the configured `qwen3.8-flash-next` model. The successful run used
+separate Hermes profiles, med-lit configuration, project registry and review folders under `/tmp`.
+
+**Twelve real conversation turns passed:** register without credentials; open the private settings
+form; save synthetic email/key values outside chat; check configuration and change new-review
+defaults; preview and approve a real scheduled literature bot; preview and approve schedule/cap
+changes; then preview and approve pause, resume and archive. Existing review defaults and archived
+review data were retained. No literature search or scheduled review run was started.
+
+**Additional native CLI/MCP checks passed:** the installer's launch command reaches the bot profile;
+an interrupted creation with a lost job ID recovers the existing routine rather than duplicating it;
+the restricted bot server lists its execution tools and hides all five setup/management tools.
+Direct management calls also reject bot-scoped execution in the unit tests.
+
+The synthetic email, key and form token were absent from captured tool/chat output and Hermes
+session databases, including SQLite WAL files. A browser-driven form check passed with no page
+errors and no requests outside loopback during save. Provider key checks, when selected by a user,
+intentionally contact the provider. This verifies the local browser fallback; it does not establish
+an embedded private card in Hermes Desktop or OS isolation from unrestricted agent file access.
+
+An initial live attempt exposed Hermes's `--env` argument behaviour: repeated flags retain only
+the last group, so isolated store paths were lost. Registration now passes every assignment after
+one flag; regression tests check it. The corrected run additionally checked the form's test folder
+before submission and verified hashes of real user configuration before and after the run.
+
+Local Linux checks: **305 passed, 1 skipped, 16 subtests**, plus lint, whitespace and browser checks.
+The same final suite on jkworkstation passed **303 tests, 3 skipped, 16 subtests**, with uv on PATH.
+These are source-checkout checks performed before the 0.4.0 release.
+
+## Private setup in Claude Code and Codex — 2026-11-09 (0.4.0)
+
+The same private setup is now available after registration with `--client claude-code` or
+`--client codex`. Neither registration asks for contact details or database credentials. The
+browser form names the selected agent, and both clients retain the isolated configuration paths
+and launch command in their native MCP registration. `--terminal` retains terminal setup;
+`--ui --client <name>` registers the selected client before opening the form.
+
+**Live clients and models:**
+
+| Host | Installed client | Model | Checks |
+| --- | --- | --- | --- |
+| Local Linux | Claude Code 2.1.319 | `claude-opus-5-5` | Two conversation turns; real Chromium form submission; status refresh; defaults |
+| Local Linux | Codex CLI 0.167.0 | `gpt-6.1-sol` | Two conversation turns through its app server; real Chromium form submission; status refresh; defaults |
+| jkworkstation | Claude Code 2.1.312 | `claude-opus-5-5` | Twelve conversation turns; private setup, defaults and full bot-management lifecycle |
+| jkworkstation | Codex CLI 0.166.0 | `gpt-6.1-sol` | Twelve conversation turns through its app server; private setup, defaults and full bot-management lifecycle |
+
+Each session began with unconfigured settings. A test harness, separate from the agent, entered a
+synthetic contact address and Scopus key through the private form. The local checks drove Chromium
+and verified the correct client instructions, with no page errors or requests outside loopback.
+The headless workstation checks submitted to the same form endpoints directly. Both agents saw
+the saved configuration through the same open MCP connection and changed defaults for new reviews.
+
+For each workstation agent, bot creation and schedule/cap updates required preview followed by a
+separate approval turn. Pause, resume and archive used the same sequence. The tests verified the
+saved state after each preview and approval, the real Hermes routine after creation, and removal
+of the routine after archive. Review data was retained. No literature search or scheduled review
+execution was started. Hermes remains the scheduling backend for every agent.
+
+All four runs used temporary native client settings, med-lit stores and review folders. The
+workstation runs also used isolated Hermes homes. Hashes of the existing user settings were
+unchanged. The synthetic contact address, key, private form URL and access token were absent from
+captured transcripts and native client state, including SQLite databases and WAL files. Temporary
+login copies, client homes and the test checkout were removed after testing. An initial workstation Codex attempt could not refresh its
+expired login; the successful retry used a temporary copy of the working local login, leaving the
+workstation's saved login untouched.
+
+The repository suite passed **312 tests, 1 skipped, 26 subtests**. The final registration and bot
+regression checks passed **39 tests, 6 subtests**, and lint and whitespace checks passed. These are
+source-checkout checks performed before the 0.4.0 release. The form opens in a local browser;
+these checks do not establish an embedded chat card or prevent an unrestricted agent from reading
+local files outside the intended setup flow.
+
 ## Release gates
 
 - **Script runs.** Release CI runs both install scripts from the checkout, without registering, on Linux, macOS and Windows. A run that registers with real clients (Hermes, Codex, pi) and the ChatGPT browser form is checked by hand on the platforms available before a release, and recorded here.

@@ -1,10 +1,16 @@
 # Bots: keep a review up to date (Hermes)
 
-A **bot project** re-runs a search you have already tried, on a schedule, and adds what is new: it screens new articles, fetches the included ones, extracts them into the wiki and updates the entity pages their evidence changes. Bots run as Hermes scheduled jobs; Claude Code and Claude Desktop have no scheduler for them.
+A **bot project** re-runs a search you have already tried, on a schedule, and adds what is new: it screens new articles, fetches the included ones, extracts them into the wiki and updates the entity pages their evidence changes. Bots run as Hermes scheduled jobs. You can configure them from Hermes, Claude Code or Codex chat; Hermes must be installed on the machine running med-lit to schedule and run them.
 
 ## Creating a bot
 
-**Before you start,** run a normal review in Hermes at least up to screening criteria (search, then "Screen it. Include … Exclude …"). A bot copies that search's question and criteria, so you begin from something you have seen work. Then:
+**Before you start,** run a normal review in your agent at least up to screening criteria (search, then "Screen it. Include … Exclude …"). A bot copies that search's question and criteria, so you begin from something you have seen work. In a normal Hermes, Claude Code or Codex chat, ask:
+
+> Keep this review updated every Monday at 9 AM. Name it SDM watch and screen at most five new articles per run.
+
+Your agent lists eligible reviews with `bot_sources` and previews the question, criteria, local schedule
+and limits with `create_bot`. After you approve the proposal, it creates the bot project and real
+Hermes routine. Creating a routine does not run a review immediately. You can also use the terminal:
 
 ```bash
 uvx med-lit-mcp setup bot
@@ -21,7 +27,7 @@ To run a bot now instead of waiting for its time, answer yes to setup's last que
 
 The `medlitbot` profile is a Bot in Bot Mode, titled *med-lit bot* (rename or restyle it there; setup leaves your changes alone). All your bots are its **Routines**, named `[bot:medlitbot] <bot name>`, and each keeps its own question, criteria and schedule. Each run's report is posted to the med-lit bot's chat, so you click the Bot to read the latest updates. A silent run posts nothing, and each posted report costs the Bot one model turn.
 
-You can ask the Bot about its reviews ("how did SDM watch's last run go?"). Like the scheduled runs, its chat has only the med-lit tools: it cannot change a bot project or decide its uncertain articles, and it cannot message other Bots to do so; do that in a normal Hermes chat. Scheduled runs fire while Hermes Desktop is open or a Hermes gateway runs. Bots created before this support move into Bot Mode the next time you open them with `setup bot --edit`.
+You can ask the Bot about its reviews ("how did SDM watch's last run go?"). Like the scheduled runs, its chat has only the med-lit tools: it cannot change a bot project or decide its uncertain articles, and it cannot message other Bots to do so; do that in a normal researcher chat. Scheduled runs fire while Hermes Desktop is open or a Hermes gateway runs. Bots created before this support move into Bot Mode the next time you open them with `setup bot --edit`.
 
 ## Each run
 
@@ -37,7 +43,13 @@ You can ask the Bot about its reviews ("how did SDM watch's last run go?"). Like
 
 ## Changing a bot
 
-`uvx med-lit-mcp setup bot --edit "SDM watch"` opens a menu:
+In a normal Hermes, Claude Code or Codex chat, ask “Change SDM watch to daily at 8:30, ten articles per run”, “Pause SDM
+watch”, “Resume it” or “Archive it”. `manage_bot` previews the change and applies it after approval,
+updating both the saved review state and the Hermes routine. It also versions question and criteria
+changes. A bot that is currently running must finish before its review configuration can change.
+Archiving keeps the review folder, wiki and history.
+
+The terminal alternative, `uvx med-lit-mcp setup bot --edit "SDM watch"`, opens a menu:
 
 | Change | What happens |
 |---|---|
@@ -47,7 +59,9 @@ You can ask the Bot about its reviews ("how did SDM watch's last run go?"). Like
 | Pause or resume | Pauses or resumes the Hermes job. |
 | Archive | Removes the schedule. The folder, wiki, reports and history stay; delete the folder yourself if you no longer want it. |
 
-Every question and criteria version is kept in `.med-lit/bot.json`. A normal chat can read a bot project but not change its question, criteria or settings.
+Every question and criteria version is kept in `.med-lit/bot.json`. Bot changes use `manage_bot` in
+a normal researcher chat. The restricted `medlitbot` profile and its scheduled runs have no settings
+or bot-management tools; those operations also reject calls made with `MED_LIT_SCOPE=bot`.
 
 ## Bot settings
 

@@ -74,8 +74,14 @@ def ensure_profile(hermes: str, command: list[str]) -> list[str]:
     for name in re.findall(r"^\s{2}(\S+)\s{2,}\S", listed, re.MULTILINE):
         if name not in ("Name",) and not name.startswith("─"):
             _hermes(hermes, "mcp", "remove", name, stdin="y\n")
+    env_args = ["MED_LIT_SCOPE=bot"]
+    # Hermes filters inherited variables. Share only the locations of med-lit's local stores,
+    # never their contents, so a custom configuration also works in scheduled runs.
+    for name in ("MED_LIT_CONFIG_DIR", "MED_LIT_STATE_DIR", "MED_LIT_PROJECTS_DIR"):
+        if os.environ.get(name):
+            env_args.append(f"{name}={os.environ[name]}")
     added = _hermes(
-        hermes, "mcp", "add", SERVER_NAME, "--command", command[0], "--env", "MED_LIT_SCOPE=bot",
+        hermes, "mcp", "add", SERVER_NAME, "--command", command[0], "--env", *env_args,
         "--connect-timeout", "180", "--args", *command[1:], stdin="y\n",
     )
     if added.returncode != 0 or "Saved" not in added.stdout:
@@ -124,6 +130,25 @@ def create_job(hermes: str, name: str, schedule: str) -> str:
     if result.returncode != 0 or not found:
         raise SystemExit(f"Could not create the scheduled job:\n{(result.stderr or result.stdout)[-500:]}")
     return found.group(0)
+
+
+def find_job(hermes: str, name: str) -> str | None:
+    """Recover a routine whose creation succeeded before the caller lost its job ID."""
+    result = _hermes(hermes, "cron", "list", "--all")
+    if result.returncode:
+        raise ValueError("Could not check existing Hermes routines; no new routine was created.")
+    text = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout)
+    matches, current = [], None
+    for line in text.splitlines():
+        identity = JOB_ID.match(line.strip())
+        if identity:
+            current = identity.group(0)
+        elif (current and line.strip().startswith("Name:")
+              and line.strip().removeprefix("Name:").strip() == job_name(name)):
+            matches.append(current)
+    if len(matches) > 1:
+        raise ValueError("Several Hermes routines have this bot name. Resolve the duplicate routines before retrying.")
+    return matches[0] if matches else None
 
 
 def job_command(hermes: str, action: str, job_id: str, *extra: str, timeout: float | None = 300) -> str:

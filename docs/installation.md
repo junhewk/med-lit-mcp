@@ -4,8 +4,11 @@
 
 | User | Entry point | Settings | Package source |
 | --- | --- | --- | --- |
-| Hermes, Claude Code, Codex, pi on macOS or Linux | `scripts/install.sh` (or `uvx med-lit-mcp setup`) | Terminal prompts | PyPI, newest release |
-| Hermes, Claude Code, Codex, pi on Windows | `scripts\install-windows.ps1` (or `uvx med-lit-mcp setup`) | Terminal prompts | PyPI, newest release |
+| Hermes | `uvx med-lit-mcp setup --client hermes` or scripts with `--client hermes` / `-Client hermes` | Private browser form opened from chat after connection | PyPI, newest release |
+| Claude Code | `uvx med-lit-mcp setup --client claude-code` or scripts with that client | Private browser form opened from chat after connection | PyPI, newest release |
+| Codex | `uvx med-lit-mcp setup --client codex` or scripts with that client | Private browser form opened from chat after connection | PyPI, newest release |
+| pi on macOS or Linux | `scripts/install.sh --client pi` (or `uvx med-lit-mcp setup --client pi`) | Terminal prompts | PyPI, newest release |
+| pi on Windows | `scripts\install-windows.ps1 -Client pi` (or `uvx med-lit-mcp setup --client pi`) | Terminal prompts | PyPI, newest release |
 | ChatGPT desktop Work/Codex | The same scripts with `--chatgpt` / `-ChatGPT` | Local browser form | PyPI release matching the form |
 | Claude Desktop | `med-lit-<version>.mcpb` | Claude extension form | PyPI |
 
@@ -26,10 +29,11 @@ and the same command installs and updates:
 2. **Pick the server.** It runs the newest med-lit-mcp from PyPI (`uvx med-lit-mcp@latest`), which
    also makes it what clients start. With `--dev CHECKOUT` / `-Dev`, it runs a source checkout
    instead (`uv run --directory CHECKOUT med-lit-mcp`).
-3. **Run setup.** `med-lit-mcp setup` saves the email, reviews folder and optional keys and registers
+3. **Run setup.** An explicit `--client hermes`, `--client claude-code` or `--client codex` registers
+   before configuration; the user then asks that agent to open the private form. Otherwise `med-lit-mcp setup` saves the email, reviews folder and optional keys and registers
    the server with the clients found, or with the ones named by `--client` / `-Client`. With
    `--chatgpt` / `-ChatGPT` it opens the browser form instead (`setup --ui --client chatgpt`). Other
-   options pass through: `--email`, `--projects-dir`, `--yes`, `--no-register`.
+   options pass through: `--email`, `--projects-dir`, `--yes`, `--no-register`, `--terminal`.
 4. **Check.** It runs `med-lit-mcp --check` and prints the saved configuration as the server reads it.
 
 Details:
@@ -41,10 +45,19 @@ Details:
 
 ## Shared implementation
 
-- **`cli_setup.py`** owns command parsing and the terminal prompts. Only ChatGPT uses `setup --ui`.
-- **`setup_ui.py`** serves the browser form on loopback and opens the browser asynchronously. It then
-  saves settings, registers the connection and verifies the actual MCP initialization, tool listing
-  and workflow guide. Ready requires that verification to pass. The registered command runs the
+- **`cli_setup.py`** owns command parsing, registration before private setup for Hermes, Claude Code
+  and Codex, and the terminal prompts. `setup --ui` supports each of these clients and ChatGPT.
+  The three chat clients register before opening the form; the ChatGPT desktop installer registers
+  and verifies the connection after the form is saved.
+- **`onboarding.py`** opens the local form from an MCP tool without returning its private URL, and
+  reports only configuration status. It refreshes file-backed settings in the running MCP process.
+- **`bot_management.py`** exposes preview/approval-based bot creation and changes using the existing
+  Hermes profile/cron adapter. Scheduled bot scopes cannot invoke management operations.
+- **`setup_ui.py`** serves the browser form on loopback and opens the browser asynchronously. In a
+  connected agent chat it saves settings and returns the researcher to that conversation; the open
+  MCP connection refreshes the saved values. The ChatGPT desktop installer also registers the
+  connection and verifies MCP initialization, tool listing and the workflow guide before showing
+  Ready. That installer's registered command runs the
   PyPI release matching the form (`uv tool run --python 3.11 --from med-lit-mcp==<version>`) with an
   absolute uv. After an update the registration differs, so the form asks before replacing it.
 - **`clients.py`** writes the native med-lit entry:
@@ -55,7 +68,9 @@ Details:
 
   Changing an existing connection requires a replacement choice.
 - **Keys and settings.** The CLI and the browser form share the existing configuration and key
-  storage. Credentials sit in private files; client configuration holds only the launch command.
+  storage. Credentials sit in private files; client configuration holds the launch command, connected
+  client name and optional routing environment. Routing preserves isolated med-lit stores and the
+  browser launch environment; contact email and database keys are never copied into registration.
   Reviews remain local. Blank key fields keep saved keys; removing one is explicit.
 - **`platforms.py`** holds Windows/Unix file protection and process handling. Review locking uses
   `portalocker` on all three systems.

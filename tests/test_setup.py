@@ -82,10 +82,15 @@ class SetupTests(Case):
         self.assertEqual(stored["NCBI_EMAIL"], "me@example.org")
         self.assertEqual(stored["MED_LIT_PROJECTS_DIR"], str(Path.home() / "reviews"))
         hermes = (self.root / "hermes.log").read_text()
-        self.assertIn(f"mcp add med-lit --command {bin_dir}/uvx --connect-timeout 180 --args med-lit-mcp", hermes)
+        self.assertIn(f"mcp add med-lit --command {bin_dir}/uvx --connect-timeout 180", hermes)
+        self.assertIn("--args med-lit-mcp", hermes)
         self.assertNotIn("NCBI_EMAIL", hermes)  # settings and keys stay in the med-lit config folder
         claude = (self.root / "claude.log").read_text()
-        self.assertIn(f"mcp add med-lit --scope user -- {bin_dir}/uvx med-lit-mcp", claude)
+        self.assertIn("mcp add med-lit --scope user --env MED_LIT_CLIENT=claude-code", claude)
+        self.assertIn(f" -- {bin_dir}/uvx med-lit-mcp", claude)
+        for name in ("MED_LIT_CONFIG_DIR", "MED_LIT_STATE_DIR", "MED_LIT_PROJECTS_DIR"):
+            self.assertIn(f"{name}={os.environ[name]}", claude)
+        self.assertNotIn("NCBI_EMAIL", claude)
 
     @unittest.skipIf(os.name == "nt", "Hermes fake executable uses a Unix shell")
     def test_hermes_desktop_launcher_is_found_off_path(self) -> None:
@@ -128,6 +133,68 @@ class SetupTests(Case):
     def test_dev_checkout_runs_through_uv_run(self) -> None:
         command = cli_setup.server_command(str(self.root))
         self.assertEqual(command[1:], ["run", "--quiet", "--directory", str(self.root.resolve()), "med-lit-mcp"])
+
+    @unittest.skipIf(os.name == "nt", "Hermes fixture uses a Unix shell")
+    def test_hermes_connects_without_collecting_or_storing_private_values(self) -> None:
+        bin_dir = self.fake_clients()
+        with patch.dict(os.environ, {"PATH": f"{bin_dir}:{os.environ['PATH']}"}), \
+                patch.object(cli_setup.Console, "text", side_effect=AssertionError("must not ask for settings")), \
+                patch.object(cli_setup.Console, "secret", side_effect=AssertionError("must not ask for keys")):
+            self.assertEqual(cli_setup.main(["setup", "--client", "hermes"]), 0)
+        self.assertEqual(keys.read_config(), {})
+        self.assertEqual(keys.read_keys(), {})
+        registration = next(line for line in (self.root / "hermes.log").read_text().splitlines() if "mcp add med-lit" in line)
+        self.assertEqual(registration.count("--env"), 1)  # Hermes uses nargs='*', not repeated flags.
+        for name in ("MED_LIT_CONFIG_DIR", "MED_LIT_STATE_DIR", "MED_LIT_PROJECTS_DIR"):
+            self.assertIn(f"{name}={os.environ[name]}", registration)
+
+    def test_hermes_bootstrap_missing_client_does_not_collect_settings(self) -> None:
+        with patch.object(cli_setup, "find_hermes", return_value=None):
+            self.assertEqual(cli_setup.main(["setup", "--client", "hermes"]), 1)
+        self.assertEqual(keys.read_config(), {})
+
+    @unittest.skipIf(os.name == "nt", "Claude fixture uses a Unix shell")
+    def test_claude_and_codex_connect_without_collecting_private_values(self) -> None:
+        from med_lit_mcp import clients
+
+        bin_dir = self.fake_clients()
+        with patch.dict(os.environ, {"PATH": f"{bin_dir}:{os.environ['PATH']}"}), \
+                patch.object(cli_setup.Console, "text", side_effect=AssertionError("must not ask for settings")), \
+                patch.object(cli_setup.Console, "secret", side_effect=AssertionError("must not ask for keys")), \
+                patch.object(cli_setup.shutil, "which", side_effect=lambda name: str(bin_dir / name)):
+            self.assertEqual(cli_setup.main(["setup", "--client", "claude-code", "--client", "codex"]), 0)
+        self.assertEqual(keys.read_config(), {})
+        self.assertEqual(keys.read_keys(), {})
+        self.assertIn("MED_LIT_CLIENT=claude-code", (self.root / "claude.log").read_text())
+        self.assertIn('MED_LIT_CLIENT = "codex"', clients.codex_config().read_text())
+
+    def test_missing_claude_or_codex_does_not_collect_settings(self) -> None:
+        with patch.object(cli_setup.shutil, "which", side_effect=lambda name: "uvx" if name == "uvx" else None):
+            for name in ("claude-code", "codex"):
+                self.assertEqual(cli_setup.main(["setup", "--client", name]), 1)
+        self.assertEqual(keys.read_config(), {})
+
+    def test_terminal_retains_private_prompts_for_chat_clients(self) -> None:
+        for name in ("hermes", "claude-code", "codex"):
+            with self.subTest(client=name), patch.object(cli_setup.Console, "text", side_effect=KeyboardInterrupt):
+                self.assertEqual(cli_setup.main(["setup", "--client", name, "--terminal"]), 130)
+
+    def test_ui_registers_each_chat_client_before_opening_the_form(self) -> None:
+        for name in ("hermes", "claude-code", "codex"):
+            events = []
+            with self.subTest(client=name), \
+                    patch.object(cli_setup, "find_hermes", return_value="hermes"), \
+                    patch.object(cli_setup.shutil, "which", side_effect=lambda executable: executable), \
+                    patch.object(cli_setup, "register_client", side_effect=lambda *args, events=events: events.append("register") or "registered"), \
+                    patch("med_lit_mcp.setup_ui.main", side_effect=lambda args, events=events: events.append("form") or 0):
+                self.assertEqual(cli_setup.main(["setup", "--ui", "--client", name]), 0)
+            self.assertEqual(events, ["register", "form"])
+
+    def test_private_hermes_form_can_open_without_registering_a_client(self) -> None:
+        with patch("med_lit_mcp.setup_ui.main", return_value=0) as ui, \
+                patch.object(cli_setup, "find_hermes", side_effect=AssertionError("registration must be skipped")):
+            self.assertEqual(cli_setup.main(["setup", "--ui", "--client", "hermes", "--no-register"]), 0)
+        self.assertTrue(ui.called)
 
     def test_default_settings_are_asked_validated_and_saved(self) -> None:
         answers = iter(["2020-2010", "2020-", "40", "", "30", "", "50", "8"])  # rejected: years, then a bot cap over 20

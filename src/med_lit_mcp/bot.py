@@ -10,7 +10,7 @@ A bot project has one standing run that every scheduled run adds to. One schedul
     bot_finish  refresh the wiki, write updates/<date>.md and release the lock; the returned
                 message is the run's report, or [SILENT] when nothing happened
 
-The question and criteria change only through `med-lit-mcp setup bot --edit`, which records each
+The question and criteria change through researcher-approved management or `setup bot --edit`, which records each
 version: new criteria re-screen everything collected (articles that become excludes are withdrawn
 from the wiki), and a new question backfills from the bot's start date.
 """
@@ -27,8 +27,8 @@ from pathlib import Path
 from typing import Any
 
 from . import screening, search, triage, wiki
-from .projects import Project, create_project, get_project, new_run_dir
 from .platforms import process_alive
+from .projects import Project, create_project, get_project, new_run_dir
 from .runs import is_eligible
 from .settings import apply_changes, load_settings, write_settings
 from .store import (
@@ -614,7 +614,7 @@ def bot_finish(name: str | None) -> dict[str, Any]:
     return {"message": f"{summary}\n\nReport: {report}", "report": str(report)}
 
 
-# Changes made through `setup bot --edit`.
+# Researcher-requested changes, through management tools or `setup bot --edit`.
 
 
 def set_question(project: Project, question: dict[str, Any], sources: list[str]) -> dict[str, Any]:

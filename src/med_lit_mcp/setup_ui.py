@@ -1,4 +1,4 @@
-"""Short-lived local settings form for novice ChatGPT desktop users."""
+"""Short-lived local settings form. Private input never passes through the model."""
 
 from __future__ import annotations
 
@@ -100,12 +100,14 @@ def ui_command(args: argparse.Namespace) -> list[str]:
 class SetupServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, command: list[str], *, register: bool = True, email: str | None = None, folder: str | None = None):
+    def __init__(self, command: list[str], *, register: bool = True, email: str | None = None, folder: str | None = None,
+                 client: str = "chatgpt"):
         super().__init__(("127.0.0.1", 0), SetupHandler)
         self.command = command
-        self.register = register
+        self.register = register and client == "chatgpt"
         self.email = email
         self.folder = folder
+        self.client = client
         self.token = secrets.token_urlsafe(32)
         self.last_activity = time.monotonic()
         self.finished = threading.Event()
@@ -159,9 +161,12 @@ class SetupHandler(BaseHTTPRequestHandler):
                 config = keys.read_config()
                 stored = keys.read_keys()
             except (OSError, ValueError):
-                self.respond(400, {"error": "Could not open saved settings. Ask ChatGPT to check the med-lit settings files, then reopen this form."})
+                self.respond(400, {"error": "Could not open saved settings. Repair the local med-lit settings files, then reopen this form. Do not paste them into chat."})
                 return
             self.respond(200, {
+                "client": self.server.client,
+                "client_name": clients.CLIENT_NAMES.get(self.server.client, "your agent"),
+                "register": self.server.register,
                 "email": self.server.email or config.get("NCBI_EMAIL", ""),
                 "folder": self.server.folder or config.get("MED_LIT_PROJECTS_DIR", str(projects_dir())),
                 "providers": [
@@ -264,9 +269,7 @@ class SetupHandler(BaseHTTPRequestHandler):
             raise SettingsError("Cannot write to this review folder. Choose a folder you can write to.") from exc
         # Check registration conflicts before changing stored settings.
         if self.server.register:
-            registration = clients.register_codex(self.server.command, replace=replace)
-        else:
-            registration = "Settings saved without registering a connection."
+            clients.register_codex(self.server.command, replace=replace, client="chatgpt")
         with file_lock(keys.config_dir() / ".settings.lock"):
             keys.write_config({"NCBI_EMAIL": email.strip(), "MED_LIT_PROJECTS_DIR": str(root)})
             for name, change in changes.items():
@@ -275,8 +278,9 @@ class SetupHandler(BaseHTTPRequestHandler):
                     keys.set_key(provider, change["value"])
                 elif change["action"] == "remove":
                     keys.remove_key(provider)
+            keys.load_into_environ()
         if not self.server.register:
-            return {"saved": True, "complete": True, "message": registration}
+            return {"saved": True, "complete": True, "message": "Settings saved. Return to your chat to continue."}
         try:
             result = anyio.run(check_connection, self.server.command)
         except (ExceptionGroup, OSError, TimeoutError, ValueError, RuntimeError, McpError):
@@ -286,7 +290,11 @@ class SetupHandler(BaseHTTPRequestHandler):
 
 
 def main(args: argparse.Namespace) -> int:
-    with SetupServer(ui_command(args), register=not args.no_register, email=args.email, folder=args.projects_dir) as server:
+    selected = getattr(args, "client", None)
+    client = selected[0] if selected else "chatgpt"
+    command = ui_command(args) if client == "chatgpt" else server_command(args.dev)
+    with SetupServer(command, register=not args.no_register and client == "chatgpt", email=args.email,
+                     folder=args.projects_dir, client=client) as server:
         url = f"{server.origin}/#{server.token}"
         print(f"med-lit settings: {url}")  # noqa: T201
         print("Complete the form in your browser. This session closes after 15 minutes of inactivity.")  # noqa: T201

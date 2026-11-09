@@ -128,7 +128,7 @@ class FetchTests(Case):
         with patch.object(fetch.time, "monotonic", side_effect=lambda: next(clock, 100.0)):
             later = fetch.fetch_batch(run_id)
         self.assertEqual(later["remaining"], 0)
-        with patch.dict(os.environ, {"NCBI_EMAIL": ""}), self.assertRaisesRegex(ValueError, "NCBI_EMAIL is not set"):
+        with patch.dict(os.environ, {"NCBI_EMAIL": ""}), self.assertRaisesRegex(ValueError, "Contact email is not configured"):
             fetch.fetch_batch(run_id)
 
     def test_time_budget_stops_between_articles(self) -> None:

@@ -4,11 +4,55 @@ med-lit-mcp is on [PyPI](https://pypi.org/project/med-lit-mcp/) and runs through
 
 | Client | Installation | Email, folder and keys |
 | --- | --- | --- |
-| Hermes (terminal or Desktop), Claude Code, Codex, pi | [Install script or CLI `setup`](#hermes-claude-code-codex-and-pi-install-script) | Terminal prompts |
+| Hermes (terminal or Desktop) | `uvx med-lit-mcp setup --client hermes` | Say “Set up med-lit” in Hermes; private local browser form |
+| Claude Code | `uvx med-lit-mcp setup --client claude-code` | Say “Set up med-lit” in a new Claude Code session; private local browser form |
+| Codex | `uvx med-lit-mcp setup --client codex` | Say “Set up med-lit” in a new Codex session; private local browser form |
+| pi | [Install script or CLI `setup`](#hermes-claude-code-codex-and-pi-install-script) | Terminal prompts |
 | ChatGPT desktop Work/Codex (macOS, Windows) | [Install script with `--chatgpt`](#chatgpt-desktop-install-script-and-browser-form) | Local browser form |
 | Claude Desktop | [`.mcpb` extension](#claude-desktop-no-command-line) | Claude's settings form |
 
-To try the latest unreleased code, replace `med-lit-mcp` with `--from git+https://github.com/junhewk/med-lit-mcp med-lit-mcp` in any command.
+For a development checkout, run `uv run med-lit-mcp setup --dev . --client <name>` from the repository. See [Development](development.md).
+
+## Hermes, Claude Code and Codex: connect first, configure privately
+
+```bash
+uvx med-lit-mcp setup --client hermes
+uvx med-lit-mcp setup --client claude-code
+uvx med-lit-mcp setup --client codex
+```
+
+Run the command for your agent. It registers the MCP server without asking for an email or keys.
+The install scripts support the same `--client` choices (Windows: `-Client`). Start a new conversation
+in your agent; Hermes also supports `/reload-mcp` in an existing session. Then say:
+
+> Set up med-lit.
+
+Your agent opens a short-lived local browser form. Enter your contact email, reviews folder and optional
+database keys there and select **Save settings**. Keep the chat open while completing the
+form, then return to it and say you have finished.
+The open MCP connection picks up the saved values without another reload. To change them later,
+ask your agent to open med-lit settings again. The form's address and access token are not returned to
+the model. Configuration status contains booleans, never your email, keys, key suffixes or folder.
+
+The form opens on the machine running the MCP server. With SSH or a headless server, use your own
+terminal on that machine instead:
+
+```bash
+uvx med-lit-mcp setup --terminal --no-register
+```
+
+For a browser form launched directly from your terminal, use `setup --ui --client hermes`,
+`setup --ui --client claude-code` or `setup --ui --client codex`. Registration happens before the form opens.
+`--terminal` retains the earlier terminal prompts, and explicit `--email`/`--projects-dir` arguments
+retain scripted setup. Keep private values out of agent-run command arguments and chat messages.
+The one-time connection, uv prerequisite and local server remain necessary. Each agent needs its own
+MCP registration. On the same machine and user account they share med-lit's saved email and keys,
+unless `MED_LIT_CONFIG_DIR` points to different directories. Client configuration contains only
+launch metadata and routing settings, never your email or database credentials.
+
+Review defaults and scheduled bot settings can then be changed in conversation: “Use 35 records per
+source for new reviews” or “Keep this review updated every Monday at 9 AM.” Scheduled bots still
+require Hermes on the server machine, regardless of which agent manages them. See [Bots](bots.md).
 
 ## Hermes, Claude Code, Codex and pi: install script
 
@@ -19,13 +63,13 @@ bash install.sh                                              # macOS, Linux
 powershell -ExecutionPolicy Bypass -File .\install-windows.ps1   # Windows
 ```
 
-The same command installs and updates. The script needs uv: if uv is missing, it prints the command that installs it. It then runs the newest release's `med-lit-mcp setup` and checks the saved configuration. Options: `--client NAME` (repeatable: `hermes`, `claude-code`, `codex`, `pi`; default: every one found), `--email`, `--projects-dir`, `--yes`, `--no-register` (PowerShell: `-Client`, `-Email`, `-ProjectsDir`, `-Yes`, `-NoRegister`). The scripts only run `setup`, which you can also run yourself:
+The same command installs and updates. The script needs uv: if uv is missing, it prints the command that installs it. It then runs the newest release's `med-lit-mcp setup` and checks the saved configuration. Options: `--client NAME` (repeatable: `hermes`, `claude-code`, `codex`, `pi`; default: every one found), `--email`, `--projects-dir`, `--yes`, `--no-register`, `--terminal` (PowerShell: `-Client`, `-Email`, `-ProjectsDir`, `-Yes`, `-NoRegister`, `-Terminal`). The scripts only run `setup`, which you can also run yourself:
 
 ```bash
 uvx med-lit-mcp setup
 ```
 
-Setup asks for your contact email (needed for PubMed and Unpaywall), a folder for your reviews (default `~/med-lit`), optionally API keys, and optionally your default [review settings](configuration.md#review-settings), including how many articles a Hermes bot screens per run. Each key is typed with hidden input, tested against its provider right away, and saved in `~/.config/med-lit-mcp/keys.json`, a file only you can read. Keys never go into the chat or into the clients' configuration files.
+Terminal setup asks for your contact email (needed for PubMed and Unpaywall), a folder for your reviews (default `~/med-lit`), optionally API keys, and optionally your default [review settings](configuration.md#review-settings), including how many articles a Hermes bot screens per run. Each key is typed with hidden input, tested against its provider right away, and saved in `~/.config/med-lit-mcp/keys.json` with restricted file permissions. Keys never go into the chat or into the clients' configuration files. An explicit `--client hermes`, `--client claude-code` or `--client codex` uses the connect-first flow above; `--terminal` opts into terminal prompts.
 
 Setup then registers med-lit with every Hermes, Claude Code, Codex and pi CLI it finds on the machine. For pi it writes only the `med-lit` entry of pi's `mcp.json`; the optional pi package is installed with `pi install` ([med-lit in pi](pi.md)). Hermes Desktop uses the same Hermes configuration, so this registers it too, even when the Desktop's `hermes` command is not on your `PATH`; start a new chat (or `/reload-mcp`) to load the tools. Hermes Desktop ships its own uv, so without uv of your own you can run `~/.hermes/bin/uvx med-lit-mcp setup`. Either way med-lit runs in its own uv environment, separate from Hermes's Python.
 

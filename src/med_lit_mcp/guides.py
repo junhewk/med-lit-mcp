@@ -16,8 +16,37 @@ _TYPES = "\n".join(
 _ROLES = "\n".join(f"- {name}: {meaning}" for name, meaning in MENTION_ROLES.items())
 
 GUIDES: dict[str, str] = {
+    "setup": """\
+# Private med-lit setup
+
+Call med_lit_settings(action="status"). If unconfigured, call it with action="open" and ask the
+researcher to complete the private local browser form. Wait, then check status again. Never ask for
+email or keys in chat, read or capture the form or credential files, or include private values in
+tool arguments. On a headless machine the tool supplies a command for the researcher's own terminal.
+review_defaults changes defaults for new reviews and bots; existing projects keep their settings.
+For scheduled literature bots, follow guide("bots").""",
+    "bots": """\
+# Scheduled literature reviews in Hermes
+
+Use bot_sources to list tried reviews with saved questions and screening criteria. Copy the chosen
+run with create_bot(name, from_run, schedule, changes?, confirmed=false). Daily schedules are
+'M H * * *'; weekly schedules are 'M H * * D' (0=Sunday). Times use the machine's local clock;
+show the returned timezone. Show the question, criteria and limits and wait for approval. Then call
+create_bot again with the same arguments and confirmed=true. It creates the project, restricted
+medlitbot profile and Hermes routine directly; no shell access is needed. It does not run a search now.
+
+Use manage_bot to show configuration, update the schedule/limits/question/criteria, pause, resume or
+archive a bot. Preview changes with confirmed=false and wait for approval before confirmed=true.
+Criteria changes re-screen collected articles; question changes backfill the collection window.
+Archive removes the routine but keeps the review folder and history. These management tools are
+available only in normal researcher chats. Scheduled bots keep their restricted execution tools.
+Hermes Desktop or a gateway must be running for scheduled work to fire.""",
     "workflow": """\
 # med-lit workflow
+
+Setup: med_lit_settings opens the private email/key form; review_defaults changes defaults for new
+reviews. Scheduled literature bots: bot_sources -> create_bot; manage_bot changes their settings and
+Hermes routines in normal chat (guide "bots"). These operations need no shell access.
 
 Stages: project → search → screening → (fetch → wiki) → report. For a researcher's question, let
 research_next lead (guide "research"): it returns each step and stops at every decision that is the

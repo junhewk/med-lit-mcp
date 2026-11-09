@@ -26,11 +26,17 @@ from .medsearch.cli import _years_ago
 from .medsearch.config import Credentials
 from .medsearch.http import HttpSession, SourceError
 from .medsearch.models import Question, ValidationError
-from .medsearch.providers import MeshResolver
 from .medsearch.preprints import is_preprint
-from .medsearch.repair import MAX_TERM_WORDS, is_generic, mentions_age, repair_question, unsearchable
-from .projects import Project, new_run_dir, run_dir
+from .medsearch.providers import MeshResolver
+from .medsearch.repair import (
+    MAX_TERM_WORDS,
+    is_generic,
+    mentions_age,
+    repair_question,
+    unsearchable,
+)
 from .platforms import process_alive, stop_process_tree
+from .projects import Project, new_run_dir, run_dir
 from .runs import summary
 from .settings import SearchSettings, load_settings, year_filters
 from .store import (
@@ -247,7 +253,7 @@ def validate_question(
     normalized["components"] = parsed.to_dict()["components"]
     warnings = []
     if not normalized["filters"].get("from_date"):
-        start = _years_ago(date.today(), 3).isoformat()  # noqa: DTZ011 - same local date as the engine
+        start = _years_ago(date.today(), 3).isoformat()
         warnings.append(
             f"No from_date: the search covers publications from {start} (three-year default). "
             "Set filters.from_date to search earlier."
@@ -566,7 +572,7 @@ def europepmc_query(question: dict[str, Any]) -> str:
     if not blocks:
         raise ValueError("Europe PMC search needs structured question component groups")
     filters = question.get("filters") or {}
-    start = filters.get("from_date") or _years_ago(date.today(), 3).isoformat()  # noqa: DTZ011 - as the engine
+    start = filters.get("from_date") or _years_ago(date.today(), 3).isoformat()
     blocks.append(f"FIRST_PDATE:[{start} TO {filters.get('to_date') or '*'}]")
     query = " AND ".join(blocks)
     return f"{query} NOT SRC:PPR" if filters.get("exclude_preprints") else query

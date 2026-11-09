@@ -13,7 +13,7 @@ Setup writes one entry, `med-lit`, into pi's `mcp.json` in its agent folder (`$P
 default `~/.pi/agent`) and leaves every other server and setting in the file as it was.
 
 - **Tool exposure.** The entry declares med-lit's tools to the model directly (`"exposure": "direct"`)
-  and hides the three scheduled-bot tools.
+  and hides the scheduled-bot execution tools.
 - **Your changes are kept.** If you later change the entry (for example its exposure in `/mcp`), a
   repeated setup keeps your change.
 - **Checking it.** Run `pi mcp list`. Start a new pi session, or `/reload`, to load the tools.
@@ -21,7 +21,7 @@ default `~/.pi/agent`) and leaves every other server and setting in the file as 
 ## 2. The package (optional): research policy and fresh workers
 
 ```bash
-pi install git:github.com/junhewk/med-lit-mcp@v0.3.0   # the tag matching your med-lit-mcp version
+pi install git:github.com/junhewk/med-lit-mcp@v0.4.0   # the tag matching your med-lit-mcp version
 ```
 
 The package is one extension. It is not part of the Python package.

@@ -13,6 +13,8 @@ To test the setup flows from this checkout, run the install scripts with `--dev`
 
 ```bash
 scripts/install.sh --dev . --client codex
+scripts/install.sh --dev . --client claude-code
+scripts/install.sh --dev . --client hermes
 scripts/install.sh --dev . --chatgpt
 ```
 
@@ -24,7 +26,19 @@ The database search engine in `src/med_lit_mcp/medsearch/` (query compilation, M
 
 ## Compatibility and validation
 
-Review locks, private credential storage and process recovery support Linux, macOS and Windows. The 0.1.8 suites passed **231 tests locally on Linux and 232 on native macOS**. Release CI passed on all three operating systems, including **233 tests on Windows**. CI tests all three operating systems before publishing to PyPI.
+Review locks, private credential storage and process recovery support Linux, macOS and Windows.
+The 0.4.0 source suite passed **312 tests, 1 skipped, 26 subtests** on Linux. Private setup and
+conversational settings were tested with installed Hermes, Claude Code and Codex; the latter two
+also passed the full bot-management lifecycle using Hermes's scheduler on jkworkstation. These
+tests used separate native client homes and med-lit stores, and verified that synthetic credentials
+stayed out of transcripts and saved client state. CI tests all three operating systems before
+publishing to PyPI. See [Validation](validation.md) for the exact scope and earlier platform checks.
+
+When testing setup or bot registration, use temporary `MED_LIT_CONFIG_DIR`, `MED_LIT_STATE_DIR`,
+`MED_LIT_PROJECTS_DIR`, and the client's own configuration directory (`HERMES_HOME`,
+`CLAUDE_CONFIG_DIR` or `CODEX_HOME`). Check the generated registration and the form's reviews folder
+before submitting synthetic values. Preserve those paths in the server environment. Never run
+these tests against a researcher's saved settings or put real credentials in fixtures or transcripts.
 
 Release CI also runs both install scripts from the checkout on Linux, macOS and Windows.
 

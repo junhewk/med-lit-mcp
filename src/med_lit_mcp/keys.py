@@ -49,6 +49,7 @@ PROVIDERS = (
              "lets Scopus work off your institution's network, if Elsevier issued one"),
 )
 BY_NAME = {provider.name: provider for provider in PROVIDERS}
+_loaded: dict[str, str] = {}
 
 
 def config_dir() -> Path:
@@ -117,11 +118,22 @@ def remove_key(provider: Provider) -> bool:
 
 
 def load_into_environ() -> None:
-    """Fill unset variables from config.json and keys.json; the client's environment wins."""
-    for values in (read_config(), read_keys()):
-        for name, value in values.items():
-            if not os.environ.get(name, "").strip():
+    """Refresh saved settings, preserving variables supplied by the MCP client.
+
+    Only replace values this process previously loaded itself. This lets an open MCP session pick
+    up private-form edits and key removals without overriding a client's explicit environment.
+    """
+    saved = read_config() | read_keys()
+    for name in _loaded.keys() | saved.keys():
+        current = os.environ.get(name, "")
+        if not current.strip() or (name in _loaded and current == _loaded[name]):
+            value = saved.get(name)
+            if value:
                 os.environ[name] = value
+                _loaded[name] = value
+            else:
+                os.environ.pop(name, None)
+                _loaded.pop(name, None)
 
 
 def mask(value: str) -> str:

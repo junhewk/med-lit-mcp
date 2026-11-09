@@ -1,4 +1,4 @@
-"""Terminal setup for agent clients, with a settings UI for ChatGPT desktop."""
+"""Register agent clients before collecting private settings, with terminal setup as an option."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from .config import projects_dir, user_path
 
 SERVER_NAME = "med-lit"
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+CHAT_SETUP_CLIENTS = {"hermes", "claude-code", "codex"}
 
 
 class Console:
@@ -83,8 +84,10 @@ def register_hermes(hermes: str, command: list[str], console: Console) -> str:
         if not console.confirm(f"Hermes already has a '{SERVER_NAME}' server. Replace it?"):
             return "kept the existing Hermes registration"
         _run([hermes, "mcp", "remove", SERVER_NAME], "y\n")
+    env_args = [f"{name}={value}" for name, value in clients.server_environment(command, "hermes").items()]
     result = _run(
-        [hermes, "mcp", "add", SERVER_NAME, "--command", command[0], "--connect-timeout", "180", "--args", *command[1:]],
+        [hermes, "mcp", "add", SERVER_NAME, "--command", command[0], "--connect-timeout", "180",
+         "--env", *env_args, "--args", *command[1:]],
         "y\n",
     )
     if result.returncode != 0 or "Saved" not in result.stdout:
@@ -97,10 +100,22 @@ def register_claude_code(claude: str, command: list[str], console: Console) -> s
         if not console.confirm(f"Claude Code already has a '{SERVER_NAME}' server. Replace it?"):
             return "kept the existing Claude Code registration"
         _run([claude, "mcp", "remove", SERVER_NAME, "--scope", "user"])
-    result = _run([claude, "mcp", "add", SERVER_NAME, "--scope", "user", "--", *command])
+    env_args = [f"{name}={value}" for name, value in clients.server_environment(command, "claude-code").items()]
+    result = _run([claude, "mcp", "add", SERVER_NAME, "--scope", "user", "--env", *env_args, "--", *command])
     if result.returncode != 0:
         return f"Claude Code registration failed:\n{(result.stderr or result.stdout).strip()[-500:]}"
     return "registered with Claude Code (all projects); restart Claude Code sessions"
+
+
+def register_client(name: str, path: str, command: list[str], console: Console) -> str:
+    if name in ("codex", "pi"):
+        register = clients.register_codex if name == "codex" else clients.register_pi
+        try:
+            return register(command)
+        except clients.RegistrationConflict as exc:
+            return register(command, replace=True) if console.confirm(str(exc)) else f"kept the existing {name} registration"
+    register = register_hermes if name == "hermes" else register_claude_code
+    return register(path, command, console)
 
 
 def ask_key(provider: keys.Provider, console: Console) -> None:
@@ -157,6 +172,29 @@ def ask_defaults(console: Console) -> None:
 
 
 def setup(args: argparse.Namespace, console: Console) -> int:
+    # Explicit chat clients connect first; their MCP tool collects private input outside chat.
+    # Explicit settings and --terminal retain the terminal workflow.
+    chat_clients = bool(args.client) and set(args.client) <= CHAT_SETUP_CLIENTS
+    bootstrap = (
+        chat_clients and not args.no_register
+        and not getattr(args, "terminal", False) and not args.email and not args.projects_dir
+    )
+    if bootstrap or (args.ui and chat_clients and not args.no_register):
+        command = server_command(args.dev)
+        for name in dict.fromkeys(args.client):
+            path = find_hermes() if name == "hermes" else shutil.which("claude" if name == "claude-code" else name)
+            if not path:
+                raise ValueError(f"{clients.CLIENT_NAMES[name]} was not found. Install it before connecting med-lit.")
+            message = register_client(name, path, command, console)
+            print(message)
+            if "failed" in message:
+                return 1
+        if not args.ui:
+            names = ", ".join(clients.CLIENT_NAMES[name] for name in dict.fromkeys(args.client))
+            reload = " (or /reload-mcp in Hermes)" if "hermes" in args.client else ""
+            print(f'Connected. Start a new conversation in {names}{reload}, '
+                  'then say "Set up med-lit". Enter email and keys only in the private form it opens, never in chat.')
+            return 0
     if args.ui:
         from .setup_ui import main as ui_main
 
@@ -200,15 +238,7 @@ def setup(args: argparse.Namespace, console: Console) -> int:
             continue
         if not console.confirm(f"Register med-lit with {name}?"):
             continue
-        if name in ("codex", "pi"):
-            register_file = clients.register_codex if name == "codex" else clients.register_pi
-            try:
-                message = register_file(command)
-            except clients.RegistrationConflict as exc:
-                message = register_file(command, replace=True) if console.confirm(str(exc)) else f"kept the existing {name} registration"
-        else:
-            register = register_hermes if name == "hermes" else register_claude_code
-            message = register(path, command, console)
+        message = register_client(name, path, command, console)
         failed |= "failed" in message
         print(f"- {name}: {message}")
     print("\nDone. Ask your agent: \"Start a new review on …\". Manage keys later with: uvx med-lit-mcp keys")
@@ -283,7 +313,8 @@ def main(argv: list[str]) -> int:
     setup_parser.add_argument("--projects-dir")
     setup_parser.add_argument("--client", action="append", choices=("hermes", "claude-code", "codex", "pi", "chatgpt"),
                               help="Register with this client (repeatable); default: every one found")
-    setup_parser.add_argument("--ui", action="store_true", help="Open the ChatGPT desktop settings form (no terminal prompts)")
+    setup_parser.add_argument("--ui", action="store_true", help="Open the private settings form (Hermes, Claude Code, Codex or ChatGPT desktop)")
+    setup_parser.add_argument("--terminal", action="store_true", help="Enter settings privately in this terminal instead of configuring from chat")
     setup_parser.add_argument("--no-register", action="store_true", help="Only save settings and keys")
     setup_parser.add_argument("--dev", metavar="CHECKOUT", help="Run the server from a source checkout (development)")
     setup_parser.add_argument("--yes", action="store_true", help="Accept defaults without asking (keys are skipped)")
@@ -292,8 +323,10 @@ def main(argv: list[str]) -> int:
     keys_parser.add_argument("name", nargs="?", help=", ".join(keys.BY_NAME))
     args = parser.parse_args(argv)
     if args.command == "setup":
-        if args.ui and args.client not in (None, ["chatgpt"]):
-            parser.error("--ui supports only --client chatgpt")
+        if args.ui and args.client is not None and (len(args.client) != 1 or args.client[0] not in CHAT_SETUP_CLIENTS | {"chatgpt"}):
+            parser.error("--ui supports one --client: hermes, claude-code, codex or chatgpt")
+        if args.ui and args.terminal:
+            parser.error("Choose --ui or --terminal")
         if not args.ui and args.client and "chatgpt" in args.client:
             parser.error("--client chatgpt needs --ui")
     console = Console(getattr(args, "yes", False))

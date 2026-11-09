@@ -17,9 +17,11 @@ from pydantic import BeforeValidator, Field
 from . import (
     __version__,
     bot,
+    bot_management,
     config,
     fetch,
     keys,
+    onboarding,
     projects,
     research,
     runs,
@@ -58,11 +60,18 @@ the evidence is enough). Only verbatim quotes count as evidence; uncertain
 screening decisions are the researcher's. State lives on disk: check research_next or get_run_status
 rather than chat history.
 
+First-time setup: call med_lit_settings(action='status'). If unconfigured, open its private form with
+med_lit_settings(action='open'); ask the researcher to complete it and wait. Never ask for email or
+API keys in chat, read credential files, capture the form, or return private values to the model.
+The form sends settings directly to med-lit. Call status again when the researcher has finished.
+
 Tools by stage (if your client loads tools on demand, look them up by these names):
 - research: research_next (the next step of a review); next_report + record_report (the report that
   answers the question, written after screening); record_evaluation (deep mode: is a round's evidence enough)
 - projects: list_projects, create_project, open_project, project_settings (show the review's settings
   when presenting the search question; change them only as the researcher asks)
+- setup: med_lit_settings (private form or boolean configuration status), review_defaults (defaults
+  for new reviews or bots; no credentials)
 - search: validate_question -> start_search(question_id); resume_search; add_skipped_articles (only
   when the researcher asks for articles skipped for having no DOI or PMID)
 - screening: set_screening_criteria, next_triage_batch + record_triage_scores (rank titles first),
@@ -71,8 +80,11 @@ Tools by stage (if your client loads tools on demand, look them up by these name
 - wiki: wiki_tasks (start here and follow it), export_wiki
 - status: get_run_status, list_runs, list_articles
 - bot (scheduled jobs of bot projects only; follow the job's prompt): bot_start, bot_next, bot_finish.
-  A bot project's question, criteria and settings change only with `uvx med-lit-mcp setup bot --edit`;
-  in chat, read it and decide its uncertain articles with review_article.
+- bot management (normal researcher chats only): bot_sources lists tried searches; create_bot copies
+  one into a scheduled bot; manage_bot shows or updates its schedule, settings, question and criteria,
+  pauses, resumes or archives it. Preview changes with confirmed=false, show the proposal and wait
+  for approval before confirmed=true. Scheduled bots cannot manage themselves or other bots.
+  In normal chat, decide a bot's uncertain articles with review_article.
 - rules: guide(topic) with workflow, research, question, screening, fetch, wiki, report, evaluation,
   extraction, duplicates, synthesis or ontology. Read guide("workflow") first, and the stage's guide before starting it.
 """
@@ -98,6 +110,7 @@ ProjectName = Annotated[
 
 
 async def _run(function: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+    keys.load_into_environ()
     return await anyio.to_thread.run_sync(functools.partial(function, *args, **kwargs))
 
 
@@ -113,7 +126,7 @@ def _question(question: ResearchQuestion) -> dict[str, Any]:
     return question.model_dump(mode="json", exclude_none=True)
 
 
-BOT_ONLY = "'{name}' is a bot project: it searches on its schedule, and its question and criteria change only with `uvx med-lit-mcp setup bot --edit`"
+BOT_ONLY = "'{name}' is a bot project: it searches on its schedule; use manage_bot in normal chat or `uvx med-lit-mcp setup bot --edit` to change its question and criteria"
 
 
 def _not_bot(project: projects.Project) -> projects.Project:
@@ -134,6 +147,69 @@ def _page(result: dict[str, Any]) -> list[TextContent]:
         TextContent(type="text", text=json.dumps(header, ensure_ascii=False)),
         TextContent(type="text", text=block),
     ]
+
+
+@mcp.tool(annotations=LOCAL_UPDATE_IDEMPOTENT)
+async def med_lit_settings(action: Literal["status", "open"] = "status") -> dict[str, Any]:
+    """Check configuration (booleans only), or open a private local form for email, reviews folder
+    and API keys. Never collect those values in chat, read/capture the form or credential files,
+    or pass private input as tool arguments. After the researcher completes the form, call status.
+    On a headless machine the tool gives a command for the researcher's own terminal."""
+    return await _run(onboarding.open_form if action == "open" else onboarding.status)
+
+
+@mcp.tool(annotations=LOCAL_UPDATE_IDEMPOTENT)
+async def review_defaults(
+    mode: Literal["interactive", "bot"] = "interactive",
+    changes: Annotated[dict[str, Any] | None, Field(description="Dotted review settings, e.g. search.per_source or bot.max_new_articles; never email or keys")] = None,
+) -> dict[str, Any]:
+    """Show or change defaults for new reviews or bots at the researcher's request. Existing
+    projects keep their settings; change those with project_settings or manage_bot."""
+    return await _run(onboarding.defaults, mode, changes)
+
+
+@mcp.tool(annotations=QUERY)
+async def bot_sources() -> list[dict[str, Any]]:
+    """Find approved reviews for creating scheduled literature bots with create_bot. Returns their
+    questions, criteria and run IDs; no shell or file access is needed. Show which review to copy."""
+    return await _run(bot_management.sources)
+
+
+@mcp.tool(annotations=LOCAL_UPDATE)
+async def create_bot(
+    name: Annotated[str, Field(min_length=1, max_length=80)],
+    from_run: RunId,
+    schedule: Annotated[str, Field(description="Daily M H * * * or weekly M H * * D (0=Sunday), using this machine's local clock")],
+    changes: Annotated[dict[str, Any] | None, Field(description="Dotted bot settings such as bot.max_new_articles=5")] = None,
+    confirmed: Annotated[bool, Field(description="True only after the researcher approves the preview")] = False,
+) -> dict[str, Any]:
+    """Create a scheduled literature review bot: a recurring daily or weekly Hermes routine.
+    First use bot_sources to choose a tried review, then preview with confirmed=false. After approval,
+    confirmed=true creates its project and routine in the restricted medlitbot profile. No shell needed.
+    Never starts a review run now.
+    Report the local timezone and wait for the researcher's approval of the preview."""
+    return await _run(bot_management.create, name, from_run, schedule, changes, confirmed)
+
+
+@mcp.tool(annotations=LOCAL_UPDATE)
+async def manage_bot(
+    project: str,
+    action: Literal["show", "update", "pause", "resume", "archive"] = "show",
+    schedule: str | None = None,
+    changes: Annotated[dict[str, Any] | None, Field(description="Dotted bot settings; existing values are kept unless specified")] = None,
+    question: ResearchQuestion | None = None,
+    sources: list[Source] | None = None,
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+    confirmed: bool = False,
+) -> dict[str, Any]:
+    """Configure, reschedule, pause, resume or archive a scheduled literature review bot in chat.
+    Preview first. After researcher approval, confirmed=true
+    updates its Hermes schedule and saved settings, or pauses/resumes/archives it. Criteria changes
+    re-screen collected articles; question changes backfill the collection window. Archive keeps
+    the review and history. Scheduled bot runs cannot call this tool."""
+    return await _run(bot_management.manage, project, action, schedule, changes,
+                      _question(question) if question is not None else None, sources, include, exclude, confirmed)
 
 
 @mcp.tool(annotations=LOCAL_UPDATE)
@@ -168,7 +244,7 @@ async def project_settings(
         current = settings.load_settings(owner.root)
         if changes:
             if current.mode == "bot":
-                raise ValueError("Bot project settings are changed with `uvx med-lit-mcp setup bot --edit`")
+                raise ValueError("Use manage_bot in normal chat or `uvx med-lit-mcp setup bot --edit` to change bot settings")
             current = settings.apply_changes(current, changes)
             settings.write_settings(owner.root, current)
         return owner.summary() | {"file": str(settings.settings_path(owner.root)), "settings": current.model_dump()}
@@ -178,7 +254,9 @@ async def project_settings(
 
 @mcp.tool(annotations=READ)
 async def list_projects() -> list[dict[str, Any]]:
-    """List known projects with their folders. available=false means the folder moved or is missing."""
+    """List known reviews with folders. available=false means a folder moved or is missing.
+    For a scheduled literature bot, use bot_sources then create_bot; edit one with manage_bot.
+    These tools manage Hermes routines directly; shell access is unnecessary."""
     return await _run(projects.list_projects)
 
 
@@ -201,6 +279,10 @@ async def research_next(
     """Start or continue a review: the next step from the question to the report, with `do` naming the
     tools to call. ask_researcher=true means show the researcher what it lists and wait for their answer.
     Rules: guide("research")."""
+    keys.load_into_environ()
+    if not config.ncbi_email():
+        return {"step": "setup", "do": "med_lit_settings", "action": "open", "ask_researcher": True,
+                "message": "Complete the private settings form before starting a review. Never enter your email or API keys in chat."}
     return await _run(research.research_next, project, run_id, confirm)
 
 
@@ -588,7 +670,8 @@ async def export_wiki(project: ProjectName = None) -> dict[str, Any]:
 
 @mcp.tool(annotations=READ)
 async def list_runs(project: ProjectName = None, limit: Annotated[int, Field(ge=1, le=100)] = 20) -> list[dict[str, Any]]:
-    """List a project's searches (runs), newest first."""
+    """List a project's searches (runs), newest first. To keep a tried review updated on a schedule,
+    use bot_sources then create_bot, which creates its Hermes routine directly without shell access."""
     return await _run(lambda: runs.list_runs(projects.get_project(project), limit))
 
 
@@ -747,6 +830,9 @@ def apply_stages() -> tuple[str, ...]:
                 mcp._tool_manager._tools.pop(name, None)
             for name in STAGE_PROMPTS.get(stage, ()):
                 mcp._prompt_manager._prompts.pop(name, None)
+    if projects.scope() == "bot":
+        for name in ("med_lit_settings", "review_defaults", "bot_sources", "create_bot", "manage_bot"):
+            mcp._tool_manager._tools.pop(name, None)
     return enabled
 
 

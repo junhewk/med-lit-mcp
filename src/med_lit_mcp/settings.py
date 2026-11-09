@@ -180,7 +180,7 @@ def _explain(exc: ValidationError) -> str:
 
 def session_cap(value: int) -> int:
     """A typed bot cap, refused outside 1-20 (saved files above 20 are clamped on load instead)."""
-    if not 1 <= value <= MAX_SESSION:
+    if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= MAX_SESSION:
         raise ValueError(f"Choose 1-{MAX_SESSION}: a run screens at most {MAX_SESSION} articles")
     return value
 
@@ -238,6 +238,8 @@ def apply_changes(settings: ProjectSettings, changes: dict[str, Any]) -> Project
         if parts[-1] not in target:
             raise ValueError(f"Unknown setting '{dotted}'")
         target[parts[-1]] = value
+    if settings.mode == "bot" and isinstance(data.get("bot"), dict):
+        session_cap(data["bot"].get("max_new_articles", 5))
     try:
         return ProjectSettings.model_validate(data)
     except ValidationError as exc:

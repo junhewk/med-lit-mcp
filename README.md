@@ -14,17 +14,22 @@ Your MCP client's model does the reading and writing (screening decisions, entit
 - **Clients:** Hermes (terminal and Desktop), Claude Code, Claude Desktop, Codex, pi and ChatGPT desktop Work/Codex.
 - **Platforms:** Linux, macOS and Windows.
 - **Requirements:** a contact email (`NCBI_EMAIL`). No embedding endpoint, model API key or build step.
-- **Bots:** with Hermes, a scheduled bot can keep a review up to date by screening new articles and adding them to the wiki.
+- **Bots:** configure a scheduled literature bot from Hermes, Claude Code or Codex chat; Hermes runs the schedule, screens new articles and adds them to the wiki.
 
 ## Install
 
+The CLI routes need [uv](https://docs.astral.sh/uv/getting-started/installation/). Enter your email and database keys in the form or your own terminal, never in chat.
+
 | Client | How |
 | --- | --- |
-| Hermes, Claude Code, Codex, pi | Run the install script: [`scripts/install.sh`](https://github.com/junhewk/med-lit-mcp/blob/main/scripts/install.sh) on macOS and Linux, [`scripts/install-windows.ps1`](https://github.com/junhewk/med-lit-mcp/blob/main/scripts/install-windows.ps1) on Windows. Or run `uvx med-lit-mcp setup`. Both need [uv](https://docs.astral.sh/uv/getting-started/installation/). For pi see [med-lit in pi](https://github.com/junhewk/med-lit-mcp/blob/main/docs/pi.md) |
-| ChatGPT desktop Work/Codex (macOS, Windows) | The same install script with `--chatgpt` (Windows: `-ChatGPT`), then fill in the browser form |
+| Hermes | Run `uvx med-lit-mcp setup --client hermes`, then `/reload-mcp` in Hermes and say **“Set up med-lit.”** Enter email and keys in the private local browser form. Needs [uv](https://docs.astral.sh/uv/getting-started/installation/). |
+| Claude Code | Run `uvx med-lit-mcp setup --client claude-code`, start a new Claude Code session, then say **“Set up med-lit.”** Enter email and keys in the private local browser form. |
+| Codex | Run `uvx med-lit-mcp setup --client codex`, start a new Codex session, then say **“Set up med-lit.”** Enter email and keys in the private local browser form. |
+| pi | Run `uvx med-lit-mcp setup --client pi`, or the [install script](https://github.com/junhewk/med-lit-mcp/blob/main/docs/setup.md). Needs uv. See [med-lit in pi](https://github.com/junhewk/med-lit-mcp/blob/main/docs/pi.md). |
+| ChatGPT desktop Work/Codex (macOS, Windows) | Run the [install script](https://github.com/junhewk/med-lit-mcp/blob/main/docs/setup.md#chatgpt-desktop-install-script-and-browser-form) with `--chatgpt` (Windows: `-ChatGPT`), then fill in the browser form |
 | Claude Desktop | Install `med-lit-<version>.mcpb` from the [latest release](https://github.com/junhewk/med-lit-mcp/releases/latest) under **Settings → Extensions**, then switch it on |
 
-The same script installs and updates. Setup asks for your email, a folder for your reviews (default `~/med-lit`) and optional database API keys. Keys are stored in private local files, never in the chat. See [Setup](https://github.com/junhewk/med-lit-mcp/blob/main/docs/setup.md) for every client, manual registration and updating.
+The same script installs and updates; use `--client hermes`, `--client claude-code` or `--client codex` (Windows: `-Client`) to connect before configuring privately from chat. Credentials are stored in private local files and are not returned to the chat model. On the same computer and user account, these agents share med-lit's saved settings unless you choose separate configuration directories. See [Setup](https://github.com/junhewk/med-lit-mcp/blob/main/docs/setup.md) for every client, manual registration and updating.
 
 ## Use
 
@@ -47,6 +52,15 @@ There are three modes:
 The report is written for a reader who did not see the review: a short answer first, then the evidence by theme, how much to trust it, and how the review was done, with numbered references. Each cited study and quoted finding is checked against the stored articles, and the description of the search and screening comes from the review's own record. See [Running a review](https://github.com/junhewk/med-lit-mcp/blob/main/docs/workflow.md#research-modes).
 
 You can also run each stage yourself ("Screen it. Include … exclude …", "Fetch the included articles and build the wiki"). Each review is a self-contained project folder. Open it in Obsidian with *Open folder as vault*.
+
+## What's new in 0.4.0
+
+- **Hermes, Claude Code and Codex connect before configuration.** Ask “Set up med-lit” after installation; a private local browser form collects your email and database keys without adding them to conversation history. On a headless server, use the terminal setup there. The form opens separately from the chat UI and names the connected agent.
+- **Configure scheduled literature bots in a normal agent chat.** Copy a tried review, approve the proposed schedule and limits, then change settings, pause, resume or archive it conversationally. Bots still require Hermes to run their schedules. Scheduled runs keep their restricted tools. Defaults for new reviews and bots are conversational too.
+- **Saved settings apply to the open connection.** Changing or removing a key takes effect without restarting med-lit. Existing review settings stay unchanged when you change defaults for new reviews. Terminal setup and scripted email/folder arguments remain available.
+- **More reliable bot registration.** Bots keep the launch command from the connected server, including development checkouts. Retrying a creation whose job ID was lost recovers the existing routine instead of creating a duplicate.
+
+Live setup and bot-management checks passed with Hermes, Claude Code and Codex, using isolated settings and synthetic credentials. See the [validation record](https://github.com/junhewk/med-lit-mcp/blob/main/docs/validation.md#private-setup-in-claude-code-and-codex--2026-11-09-040).
 
 ## What's new in 0.3.0
 

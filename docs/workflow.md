@@ -1,5 +1,18 @@
 # Running a review
 
+## Before your first review
+
+After [registering med-lit](setup.md), say “Set up med-lit” in Hermes, Claude Code or Codex.
+Your agent opens a local browser form for your contact email, reviews folder and optional database
+keys. Enter them there, select **Save settings**, then return to the conversation. The agent can
+check whether configuration is complete without receiving the values you entered. Keep credentials
+out of chat. On a headless machine, use the private terminal setup described in [Setup](setup.md).
+
+Review settings can stay conversational: “Use 35 records per source for new reviews” changes your
+defaults, while “Fetch only 30 articles in this review” changes the current project. Changes to
+defaults do not alter existing projects. To keep a tried review up to date, ask for a scheduled bot
+and approve its proposed question, criteria, schedule and limits; [Hermes runs those schedules](bots.md).
+
 ## Projects
 
 Each review is a **project**: one self-contained folder holding the review's wiki and, hidden inside it, everything else.
@@ -137,6 +150,7 @@ Long steps are split into bounded calls. If a call reports `running` or `remaini
 
 | Stage | Tools |
 |---|---|
+| Setup | `med_lit_settings` (private form or configuration status), `review_defaults` (defaults for new reviews and bots) |
 | Research | `research_next` (the next step from question to report), `next_report`, `record_report`, `record_evaluation` (deep mode) |
 | Projects | `create_project`, `list_projects`, `open_project`, `project_settings` |
 | Search | `validate_question`, `start_search`, `resume_search`, `add_skipped_articles` |
@@ -145,6 +159,7 @@ Long steps are split into bounded calls. If a call reports `running` or `remaini
 | Fetch | `fetch_articles` |
 | Wiki | `wiki_tasks`, `next_wiki_article`, `get_article_page`, `record_extraction`, `find_entities`, `list_duplicate_candidates`, `resolve_duplicates`, `merge_entities`, `next_synthesis`, `record_synthesis`, `export_wiki` |
 | Status | `list_runs`, `get_run_status`, `list_articles` |
+| Bot management | `bot_sources`, `create_bot`, `manage_bot` (normal researcher chats; changes require a preview and approval) |
 | Bot runs | `bot_start`, `bot_next`, `bot_finish` (used by the scheduled jobs) |
 
 Tools that work on a whole project take a `project` name, which can be left out while only one project exists. Tools that work on one search take its run ID.

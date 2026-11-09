@@ -29,6 +29,9 @@ Accept defaults without asking (needs -Email; keys are skipped).
 .PARAMETER NoRegister
 Only save the settings and keys.
 
+.PARAMETER Terminal
+Enter settings here instead of configuring privately from Hermes, Claude Code or Codex chat.
+
 .PARAMETER Dev
 Run the server from a source checkout instead of PyPI (development).
 
@@ -49,6 +52,7 @@ param(
     [string]$ProjectsDir,
     [switch]$Yes,
     [switch]$NoRegister,
+    [switch]$Terminal,
     [string]$Dev
 )
 
@@ -75,8 +79,8 @@ function Invoke-Captured {
     }
 }
 
-if ($ChatGPT -and ($Client -or $Yes -or $NoRegister)) {
-    [Console]::Error.WriteLine('-ChatGPT uses the browser form; it cannot be combined with -Client, -Yes or -NoRegister.')
+if ($ChatGPT -and ($Client -or $Yes -or $NoRegister -or $Terminal)) {
+    [Console]::Error.WriteLine('-ChatGPT uses the browser form; it cannot be combined with -Client, -Yes, -NoRegister or -Terminal.')
     exit 2
 }
 
@@ -118,6 +122,7 @@ try {
         if ($ProjectsDir) { $setupArgs += @('--projects-dir', $ProjectsDir) }
         if ($Yes) { $setupArgs += '--yes' }
         if ($NoRegister) { $setupArgs += '--no-register' }
+        if ($Terminal) { $setupArgs += '--terminal' }
     }
     if ($Dev) { $setupArgs += @('--dev', $Dev) }
     Write-Output '==> Setting up med-lit'
@@ -133,5 +138,5 @@ try {
 
 Write-Output ''
 Write-Output 'Done. Restart your MCP client (in Hermes /reload-mcp, in pi a new session or /reload), then ask:'
-Write-Output '  "Start a new review on ..."'
+Write-Output '  "Set up med-lit, then help me start a new review on ..."'
 Write-Output 'To update later, run this script again.'

@@ -55,7 +55,7 @@ class SetupUITests(Case):
         keys.set_key(keys.BY_NAME["scopus"], "existing-secret")
         result = self.request("/api/save", self.values(keys={"scopus": {"action": "keep"}}))
         self.assertTrue(result["connected"])
-        self.assertEqual(result["tools"], 37)
+        self.assertEqual(result["tools"], 42)
         self.assertTrue(self.server.succeeded)
         self.assertTrue(self.server.finished.wait(timeout=1))
         self.assertEqual(keys.read_keys()["SCOPUS_API_KEY"], "existing-secret")
@@ -132,7 +132,7 @@ class SetupUITests(Case):
 
     def test_native_handshake(self) -> None:
         result = anyio.run(check_connection, [sys.executable, "-m", "med_lit_mcp"])
-        self.assertEqual(result, {"connected": True, "tools": 37})
+        self.assertEqual(result, {"connected": True, "tools": 42})
 
     def test_folder_selection_and_cancel_leave_settings_unchanged(self) -> None:
         folder = str(self.root / 'reviews with spaces 한글')
@@ -144,9 +144,9 @@ class SetupUITests(Case):
         self.assertFalse(clients.codex_config().exists())
 
     def test_unwritable_folder_and_malformed_client_config_keep_credentials(self) -> None:
-        with patch('med_lit_mcp.setup_ui.tempfile.TemporaryFile', side_effect=PermissionError):
-            with self.assertRaises(urllib.error.HTTPError) as error:
-                self.request('/api/save', self.values())
+        with patch('med_lit_mcp.setup_ui.tempfile.TemporaryFile', side_effect=PermissionError), \
+                self.assertRaises(urllib.error.HTTPError) as error:
+            self.request('/api/save', self.values())
         self.assertIn('Cannot write', json.load(error.exception)['error'])
         config = clients.codex_config()
         config.parent.mkdir(parents=True, exist_ok=True)

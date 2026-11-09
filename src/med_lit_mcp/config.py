@@ -33,7 +33,8 @@ def ncbi_email(*, required: bool = False) -> str | None:
     value = os.environ.get("NCBI_EMAIL", "").strip() or None
     if required and not value:
         raise ValueError(
-            "NCBI_EMAIL is not set. In Hermes, Claude Code or Codex, run `uvx med-lit-mcp setup` to set your contact email. "
+            "Contact email is not configured. Call med_lit_settings(action='open') to open the private settings form; "
+            "never ask for email or API keys in chat. Alternatively, run `uvx med-lit-mcp setup --terminal` in your own terminal. "
             "In ChatGPT desktop Work/Codex, reopen the med-lit installer. "
             "Claude Desktop extension users can enter it in Settings → Extensions → med-lit."
         )

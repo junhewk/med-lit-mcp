@@ -4,6 +4,12 @@
 
 `setup` stores your email and reviews folder in `~/.config/med-lit-mcp/config.json` and your keys in `keys.json` next to it. Environment variables set in an MCP client's configuration take precedence over both.
 
+In Hermes, Claude Code or Codex, ask to open med-lit settings to change these values through the private local form.
+The form submits directly to med-lit; the model receives only configuration status. Changes apply
+to the open connection, including key removal. Database calls still send the email and credentials
+required by the chosen provider. Local files use restricted permissions, not encryption or isolation
+from an agent with unrestricted access to your account's files.
+
 | Variable | Purpose |
 |---|---|
 | `NCBI_EMAIL` | **Required** for PubMed/PMC search and for fetching. Also sent to Unpaywall, which requires a contact email. Use a real address. |
@@ -51,5 +57,9 @@ A new project starts from a copy of your defaults, so changing the defaults late
   "bot": {"bot": {"max_new_articles": 5}}
 }
 ```
+
+You can also ask Hermes, Claude Code or Codex to change defaults in chat, for example “Use 40 records per source for new
+reviews” or “Screen at most eight new articles per bot run by default.” The `review_defaults` tool
+validates the changes and keeps existing projects unchanged; it does not accept email or keys.
 
 Settings apply in this order, later ones winning: built-in defaults, your defaults, the project's file, and a value given for a single call (for example `limit_per_source` in `start_search`).
